@@ -1,0 +1,11 @@
+# Развёртывание из командной строки (необязательно, можно через сайт Cloudflare — см. README.md):
+#   npx wrangler kv namespace create INBOX     → вставьте выданный id ниже
+#   npx wrangler secret put TOKEN              → вставьте ключ из приложения
+#   npx wrangler deploy
+name = "traty-inbox"
+main = "worker.js"
+compatibility_date = "2025-09-01"
+
+[[kv_namespaces]]
+binding = "INBOX"
+id = "ВСТАВЬТЕ_ID_ХРАНИЛИЩА"

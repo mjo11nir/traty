@@ -459,6 +459,20 @@ button.row:active { background: var(--surface-2); }
 .busy { position: fixed; inset: 0; z-index: 300; display: grid; place-items: center; background: rgba(8, 10, 22, .35); }
 .busy > div { display: flex; gap: 10px; align-items: center; padding: 14px 18px; border-radius: 16px; background: var(--surface); box-shadow: var(--shadow); font-weight: 600; }
 
+/* Входящие: траты из Apple Pay и SMS */
+.ib-item { padding: 14px; border-radius: 18px; background: var(--surface-2); margin-bottom: 12px; }
+.ib-meta { font-size: 13px; color: var(--text-2); }
+.ib-main { display: flex; align-items: baseline; gap: 12px; margin-top: 4px; }
+.ib-title { flex: 1; min-width: 0; font-weight: 650; font-size: 17px; overflow-wrap: anywhere; }
+.ib-amt { font-weight: 750; font-size: 18px; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.ib-text { margin-top: 6px; font-size: 13px; color: var(--text-2); display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; }
+.ib-dup { margin-top: 8px; font-size: 13.5px; color: var(--warn); }
+.ib-item .chips.scroll { margin: 10px -14px 0; padding: 2px 14px 6px; }
+.ib-item .btn-row { margin-top: 10px; }
+.is-status { min-height: 22px; margin: 10px 2px 0; font-size: 14.5px; color: var(--text-2); }
+.row.is-auto-row .seg { flex: 0 0 116px; min-width: 0; }
+.steps code { font-size: 13px; padding: 1px 6px; border-radius: 6px; background: var(--surface-2); }
+
 /* =====================================================================
    9. Анимации и адаптив
    ===================================================================== */
@@ -586,7 +600,7 @@ button.row:active { background: var(--surface-2); }
 /* =====================================================================
    1. Константы и утилиты
    ===================================================================== */
-const APP_VERSION = '1.0.0';
+const APP_VERSION = '1.1.0';
 const STORAGE_KEY = 'traty.data.v1';
 const RATES_KEY = 'traty.rates.v1';
 const THEME_KEY = 'traty.theme';
@@ -778,6 +792,8 @@ function defaultState() {
       theme: 'system',
       paymentMethods: ['Наличные', 'Карта', 'Перевод'],
       totalBudget: null,
+      // «Входящие»: сервер, куда команды iPhone отправляют траты из Wallet и SMS
+      inbox: { url: '', token: '', autoAdd: true },
     },
     categories: DEFAULT_CATEGORIES.map((c) => ({ ...c, budget: null })),
     expenses: [],
@@ -786,7 +802,9 @@ function defaultState() {
       { id: uid(), name: 'Проезд', amount: 40, currency: 'TRY', categoryId: 'transport', payment: 'Карта', comment: 'Проезд' },
       { id: uid(), name: 'Обед', amount: 450, currency: 'TRY', categoryId: 'cafe', payment: 'Карта', comment: 'Обед' },
     ],
-    meta: { createdAt: Date.now(), lastBackupAt: null, backupSnoozeAt: null, installHintShown: false },
+    inbox: [],          // траты из банка, ожидающие подтверждения
+    merchantRules: {},  // магазин → категория (запоминается после подтверждения)
+    meta: { createdAt: Date.now(), lastBackupAt: null, backupSnoozeAt: null, installHintShown: false, inboxSeen: [], inboxSyncAt: null },
   };
 }
 
@@ -795,13 +813,17 @@ function migrate(s) {
   if (!s || typeof s !== 'object') return null;
   const d = defaultState();
   s.settings = { ...d.settings, ...(s.settings || {}) };
+  s.settings.inbox = { ...d.settings.inbox, ...(s.settings.inbox && typeof s.settings.inbox === 'object' ? s.settings.inbox : {}) };
   if (!Array.isArray(s.settings.currencies) || !s.settings.currencies.length) s.settings.currencies = [s.settings.baseCurrency];
   if (!s.settings.currencies.includes(s.settings.baseCurrency)) s.settings.currencies.unshift(s.settings.baseCurrency);
   s.categories = Array.isArray(s.categories) && s.categories.length ? s.categories : d.categories;
   if (!s.categories.some((c) => c.id === 'other')) s.categories.push({ ...DEFAULT_CATEGORIES[DEFAULT_CATEGORIES.length - 1], budget: null });
   s.expenses = Array.isArray(s.expenses) ? s.expenses : [];
   s.templates = Array.isArray(s.templates) ? s.templates : [];
+  s.inbox = Array.isArray(s.inbox) ? s.inbox : [];
+  s.merchantRules = s.merchantRules && typeof s.merchantRules === 'object' && !Array.isArray(s.merchantRules) ? s.merchantRules : {};
   s.meta = { ...d.meta, ...(s.meta || {}) };
+  if (!Array.isArray(s.meta.inboxSeen)) s.meta.inboxSeen = [];
   s.v = 1;
   return s;
 }
@@ -1417,6 +1439,11 @@ function renderHero() {
 }
 function renderBanners() {
   const st = S(), html = [];
+  if (st.inbox.length) {
+    const n = st.inbox.length;
+    html.push(`<div class="banner"><div class="ico">📥</div><div class="txt"><b>${n} ${plural(n, 'трата', 'траты', 'трат')} из банка</b>Пришли из Apple Pay или SMS — выберите категорию и подтвердите.
+      <div class="acts"><button class="link-btn" data-action="inbox">Разобрать</button></div></div></div>`);
+  }
   if (backupDue()) {
     const last = st.meta.lastBackupAt ? `Последняя копия — ${fmtDay(toISO(new Date(st.meta.lastBackupAt)))}.` : 'Резервной копии ещё не было.';
     html.push(`<div class="banner"><div class="ico">💾</div><div class="txt"><b>Пора сделать резервную копию</b>${last} Данные хранятся только на этом устройстве.
@@ -1789,6 +1816,12 @@ function renderSettings() {
       ${row('💳', 'Способы оплаты', st.settings.paymentMethods.length, 'payments')}
       ${row('🎯', 'Бюджеты', st.settings.totalBudget ? fmtMoney(st.settings.totalBudget, b, { short: true }) : '', 'go', 'data-tab="budgets"')}
     </div>
+    <div class="group-title">Автоматический ввод</div>
+    <div class="list">
+      ${row('🏦', 'Траты из Apple Pay и SMS', Inbox.configured() ? 'подключено' : 'настроить', 'inbox-setup')}
+      ${Inbox.configured() || st.inbox.length ? row('📥', 'Входящие', st.inbox.length || '', 'inbox') : ''}
+      ${row('🏪', 'Магазины и категории', Object.keys(st.merchantRules).filter((k) => !k.startsWith('#')).length || '', 'merchant-rules')}
+    </div>
     <div class="group-title">Оформление</div>
     <div class="list"><div class="row"><span class="ri">🌗</span><span class="rl">Тема</span>
       <div class="seg" id="theme-seg">${[['system', 'Система'], ['light', 'Светлая'], ['dark', 'Тёмная']].map(([v, l]) => `<button data-action="theme" data-v="${v}" class="${st.settings.theme === v ? 'on' : ''}">${l}</button>`).join('')}</div></div></div>
@@ -1807,7 +1840,7 @@ function renderSettings() {
       ${row('📲', 'Как установить на iPhone', isStandalone() ? 'установлено' : '', 'install-hint')}
       <button class="row danger" data-action="wipe"><span class="ri">🗑️</span><span class="rl">Удалить все данные</span></button>
     </div>
-    <div class="about">Траты ${APP_VERSION} · данные хранятся только на этом устройстве<br>Курсы: Frankfurter, currency-api, ExchangeRate-API</div>`;
+    <div class="about">Траты ${APP_VERSION} · ${Inbox.configured() ? 'покупки хранятся на этом устройстве, сервер «Входящих» лишь передаёт новые траты' : 'данные хранятся только на этом устройстве'}<br>Курсы: Frankfurter, currency-api, ExchangeRate-API</div>`;
 }
 
 /* =====================================================================
@@ -1815,9 +1848,10 @@ function renderSettings() {
    ===================================================================== */
 /**
  * Открывает форму покупки.
- * id — редактирование; prefill — новая покупка с заполненными полями (копия, шаблон без курса).
+ * id — редактирование; prefill — новая покупка с заполненными полями (копия, шаблон без курса, трата из «Входящих»).
+ * prefill.keepDate — оставить дату из prefill (иначе сегодня); onSaved(rec) — вызывается после сохранения.
  */
-function openExpenseForm({ id = null, prefill = null } = {}) {
+function openExpenseForm({ id = null, prefill = null, onSaved = null } = {}) {
   const st = S(), b = base();
   const editing = id ? st.expenses.find((x) => x.id === id) : null;
   if (id && !editing) return;
@@ -1827,7 +1861,7 @@ function openExpenseForm({ id = null, prefill = null } = {}) {
     amount: src.amount != null ? String(src.amount).replace('.', ',') : '',
     currency: src.currency || st.settings.lastCurrency || b,
     categoryId: src.categoryId || null,
-    date: editing ? editing.date : todayISO(),
+    date: editing ? editing.date : prefill && prefill.keepDate && prefill.date ? prefill.date : todayISO(),
     payment: src.payment || '',
     rate: keepRate ? src.rate : null,
     rateSource: keepRate ? src.rateSource : 'auto',
@@ -1839,7 +1873,7 @@ function openExpenseForm({ id = null, prefill = null } = {}) {
   const curList = unique([...st.settings.currencies, f.currency]);
   const catOrder = categoriesByRecency();
   const s = Sheet.open({
-    title: editing ? 'Покупка' : prefill && prefill.isCopy ? 'Копия покупки' : 'Новая покупка',
+    title: editing ? 'Покупка' : prefill && prefill.title ? prefill.title : prefill && prefill.isCopy ? 'Копия покупки' : 'Новая покупка',
     left: 'Отмена', className: 'sheet-form',
     body: `
       <div class="amount-wrap"><input class="amount-input" id="f-amount" type="text" inputmode="decimal" placeholder="0" autocomplete="off" enterkeyhint="done" aria-label="Сумма" value="${esc(f.amount)}"><span class="amount-cur" id="f-sym"></span></div>
@@ -2005,9 +2039,10 @@ function openExpenseForm({ id = null, prefill = null } = {}) {
       delete editing.demo; delete editing.demoFactor;
       rec = editing;
     } else {
-      rec = { id: uid(), ...data, createdAt: Date.now(), updatedAt: Date.now() };
+      rec = { id: uid(), ...data, createdAt: (prefill && prefill.createdAt) || Date.now(), updatedAt: Date.now() };
       st.expenses.push(rec);
     }
+    if (onSaved) onSaved(rec);
     App.flash(rec.id);
     Sheet.close(s);
     Store.commit();
@@ -2307,7 +2342,7 @@ async function shareOrDownload(blob, filename) {
 }
 async function exportJSON() {
   const st = S();
-  const data = { app: 'traty', version: APP_VERSION, exportedAt: new Date().toISOString(), settings: st.settings, categories: st.categories, templates: st.templates, expenses: st.expenses };
+  const data = { app: 'traty', version: APP_VERSION, exportedAt: new Date().toISOString(), settings: st.settings, categories: st.categories, templates: st.templates, merchantRules: st.merchantRules, expenses: st.expenses };
   const ok = await shareOrDownload(new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' }), `traty-backup-${todayISO()}.json`);
   if (ok) { st.meta.lastBackupAt = Date.now(); Store.commit(); toast('Резервная копия сохранена'); }
 }
@@ -2423,7 +2458,9 @@ function parseBackupJSON(text) {
     id: String(c.id), name: String(c.name).slice(0, 30), emoji: firstGrapheme(c.emoji) || '🏷️', color: /^#[0-9a-f]{6}$/i.test(c.color) ? c.color : '#94A3B8', budget: Number(c.budget) > 0 ? Number(c.budget) : null,
   })) : [];
   const tpls = Array.isArray(j.templates) ? j.templates.filter((t) => t && Number(t.amount) > 0).map((t) => ({ id: String(t.id || uid()), name: String(t.name || '').slice(0, 24), amount: Number(t.amount), currency: String(t.currency || 'TRY').toUpperCase(), categoryId: String(t.categoryId || 'other'), payment: String(t.payment || ''), comment: String(t.comment || '') })) : [];
-  return { kind: 'json', settings: j.settings || null, categories: cats, templates: tpls, expenses: list.map((x) => normalizeExpense(x, fileBase)).filter(Boolean), raw: list };
+  const rules = {};
+  if (j.merchantRules && typeof j.merchantRules === 'object') Object.entries(j.merchantRules).forEach(([k, v]) => { if (typeof v === 'string' && k) rules[String(k).slice(0, 80)] = v; });
+  return { kind: 'json', settings: j.settings || null, categories: cats, templates: tpls, merchantRules: rules, expenses: list.map((x) => normalizeExpense(x, fileBase)).filter(Boolean), raw: list };
 }
 async function handleImportFile(file) {
   let parsed = null;
@@ -2446,7 +2483,10 @@ async function handleImportFile(file) {
   const st = S();
   let added = 0;
   if (choice === 'replace' && parsed.kind === 'json') {
-    const fresh = migrate({ settings: parsed.settings || st.settings, categories: parsed.categories.length ? parsed.categories : st.categories, templates: parsed.templates, expenses: [], meta: st.meta });
+    const fileSettings = parsed.settings || st.settings;
+    // подключение «Входящих» сохраняем, если в файле его нет
+    const inboxCfg = fileSettings.inbox && fileSettings.inbox.url ? fileSettings.inbox : st.settings.inbox;
+    const fresh = migrate({ settings: { ...fileSettings, inbox: inboxCfg }, categories: parsed.categories.length ? parsed.categories : st.categories, templates: parsed.templates, merchantRules: { ...st.merchantRules, ...parsed.merchantRules }, inbox: st.inbox, expenses: [], meta: st.meta });
     // курсы в файле заданы к его собственной основной валюте — перечитываем без пересчёта
     fresh.expenses = parsed.raw.map((x) => normalizeExpense(x, null)).filter(Boolean);
     Store.state = fresh;
@@ -2458,15 +2498,541 @@ async function handleImportFile(file) {
     const have = new Set(st.expenses.map((e) => e.id));
     parsed.expenses.forEach((e) => { if (!have.has(e.id)) { st.expenses.push(e); added++; } });
     if (parsed.templates) { const t = new Set(st.templates.map((x) => x.id)); parsed.templates.forEach((x) => { if (!t.has(x.id)) st.templates.push(x); }); }
+    if (parsed.merchantRules) st.merchantRules = { ...parsed.merchantRules, ...st.merchantRules };
     st.settings.currencies = unique([...st.settings.currencies, ...parsed.expenses.map((e) => e.currency)]);
   }
   // покупки с несуществующими категориями → «Другое»
   const catIds = new Set(S().categories.map((c) => c.id));
   S().expenses.forEach((e) => { if (!catIds.has(e.categoryId)) e.categoryId = 'other'; });
+  Object.keys(S().merchantRules).forEach((k) => { if (!catIds.has(S().merchantRules[k])) delete S().merchantRules[k]; });
   Store.commit();
   applyTheme();
   toast(`Импортировано: ${added}`, { action: 'Отменить', onAction: () => { Store.state = JSON.parse(snapshot); Store.commit(); applyTheme(); } });
   resolvePending();
+}
+
+/* =====================================================================
+   9a. «Входящие»: траты из Apple Pay (Wallet) и SMS банка
+   Автоматизация в «Командах» iPhone отправляет трату на маленький сервер
+   (inbox-worker/worker.js). Приложение при открытии забирает новые траты,
+   сохраняет их у себя и удаляет с сервера. Знакомые магазины (категория
+   уже подтверждалась) добавляются сразу, остальные ждут во «Входящих».
+   ===================================================================== */
+
+/** Название магазина → ключ для запоминания категории: «MIGROS 4521 İSTANBUL» → «migros istanbul». */
+function merchantKey(name) {
+  const words = String(name || '').toLowerCase().replace(/ı/g, 'i').normalize('NFD').replace(/\p{M}/gu, '')
+    .replace(/[^\p{L}\p{N}]+/gu, ' ').trim().split(' ').filter((w) => /\p{L}/u.test(w));
+  return words.slice(0, 4).join(' ');
+}
+
+/** Подсказки категорий для популярных магазинов (пока пользователь сам не выбрал категорию). */
+const MERCHANT_HINTS = [
+  ['food', /\b(migros|macrocenter|carrefour\w*|a101|bim|sok|file|metro market|onur market|happy center|tarim kredi|getir|istegelsin|market\w*|bakkal|manav|kasap|firin|perekrestok|pyaterochka|magnit|vkusvill|lenta|auchan|lidl|aldi|spar)\b/],
+  ['cafe', /\b(starbucks|kahve\w*|coffee|cafe|kafe|caffe|restoran\w*|restaurant|lokanta\w*|burger\w*|pizza\w*|doner\w*|kebap\w*|kebab\w*|simit\w*|pastane\w*|yemeksepeti|mcdonald\w*|kfc|popeyes|dominos|espresso)\b/],
+  ['transport', /\b(uber|bitaksi|taksi|taxi|istanbulkart|akaryakit|shell|opet|petrol ofisi|aytemiz|marti|otopark|vapur|marmaray|yandex go)\b/],
+  ['telecom', /\b(turkcell|vodafone|turk telekom|netflix|spotify|youtube|apple com|icloud|google|disney|amazon prime|exxen|blutv|chatgpt|openai|anthropic|claude)\b/],
+  ['health', /\b(eczane\w*|pharmacy|apteka|hastane\w*|klinik\w*|clinic|medical)\b/],
+  ['clothes', /\b(zara|lc waikiki|koton|defacto|mavi|bershka|pull bear|mango|boyner|stradivarius|massimo dutti|uniqlo)\b/],
+  ['fun', /\b(sinema\w*|cinema\w*|cinemaximum|steam|playstation|biletix|passo|muze\w*|museum)\b/],
+  ['home', /\b(ikea|koctas|bauhaus|enerjisa|igdas|iski|aidat|english home|madame coco)\b/],
+  ['travel', /\b(otel\w*|hotel\w*|thy|turkish airlines|pegasus|ajet|booking|airbnb|obilet|flypgs)\b/],
+];
+
+/** Категория для магазина: сначала запомненная, потом подсказка. { id, learned } или null. */
+function suggestCategory(merchant) {
+  const k = merchantKey(merchant);
+  if (!k) return null;
+  const R = S().merchantRules, ids = new Set(S().categories.map((c) => c.id));
+  const learned = R[k] || R['#' + k.split(' ')[0]];
+  if (learned && ids.has(learned)) return { id: learned, learned: true };
+  for (const [id, re] of MERCHANT_HINTS) if (ids.has(id) && re.test(k)) return { id, learned: false };
+  return null;
+}
+/** Запоминает категорию магазина (точное название и первое слово — для разных филиалов одной сети). */
+function learnMerchant(merchant, categoryId) {
+  const k = merchantKey(merchant);
+  if (!k || !categoryId) return;
+  const R = S().merchantRules;
+  R[k] = categoryId;
+  const first = k.split(' ')[0];
+  if (first.length >= 3) R['#' + first] = categoryId;
+}
+
+/* --- Разбор сумм: «₺1.234,50», «9,99 $», «USD 12.00», «450,00 TL», SMS банка --- */
+const CUR_ALIASES = { '₺': 'TRY', TL: 'TRY', YTL: 'TRY', $: 'USD', '€': 'EUR', '£': 'GBP', '₽': 'RUB', 'РУБ': 'RUB', 'Р': 'RUB', '₾': 'GEL', '₸': 'KZT', '₴': 'UAH' };
+function curFrom(tok) {
+  if (!tok) return null;
+  const t = String(tok).replace(/\.$/, '').trim().toUpperCase();
+  return CUR_ALIASES[t] || (CURRENCY_INFO[t] ? t : null);
+}
+/** «1.234» и «1,234» — тысячи; «12,50» и «9.99» — копейки; оба знака — по последнему. */
+function parseAmountStr(str) {
+  const s = String(str).replace(/[\s  ']/g, '');
+  if (s.includes(',') && s.includes('.')) return parseNum(s);
+  const sep = (s.match(/[.,]/) || [])[0];
+  if (!sep) return Number(s);
+  const parts = s.split(sep);
+  return Number(parts.length > 2 || parts[parts.length - 1].length === 3 ? parts.join('') : parts.join('.'));
+}
+const MONEY_L = 'A-Za-zА-Яа-яЁё';
+const MONEY_SYM = '₺|\\$|€|£|₽|₾|₸|₴';
+const MONEY_RE = new RegExp(
+  `(?:(${MONEY_SYM}|(?<![${MONEY_L}])[${MONEY_L}]{1,3}(?![${MONEY_L}]))\\.?\\s?)?`
+  + '(?<![\\d.,:])(\\d{1,3}(?:[., \\u00a0\\u202f]\\d{3})+(?:[.,]\\d{1,2})?|\\d+(?:[.,]\\d{1,2})?)(?![\\d])'
+  + `(?:\\s?(${MONEY_SYM}|[${MONEY_L}]{1,3}(?![${MONEY_L}])))?`, 'g');
+/**
+ * Ищет сумму в строке. Предпочтение — числу рядом с валютой.
+ * loose: строка — это только сумма (поле Wallet), тогда подойдёт и число без валюты.
+ */
+function parseMoney(text, loose) {
+  let firstPlain = null;
+  for (const m of String(text || '').matchAll(MONEY_RE)) {
+    const amount = parseAmountStr(m[2]);
+    if (!(amount > 0)) continue;
+    const currency = curFrom(m[1]) || curFrom(m[3]);
+    if (currency) return { amount, currency };
+    if (!firstPlain) firstPlain = { amount, currency: null };
+  }
+  return loose ? firstPlain : null;
+}
+/** Название магазина из текста SMS (типичные формулировки турецких банков). */
+function merchantFromText(text) {
+  const t = String(text || '');
+  const pats = [
+    /tarihinde\s+(.+?)\s+(?:üye\s+)?(?:i[sş]yerin(?:den|de)|firmas[iı]ndan)/i,
+    /(?:i[sş]yeri|merchant|магазин)\s*[:\-]\s*([^,;\n]+?)(?:\s+(?:\d|tutar)|[,;\n]|$)/i,
+    /\b(?:at|в)\s+([A-Z0-9][A-Z0-9 &'.\-]{2,40}?)(?:\s+(?:on|for|\d)|[,;.\n]|$)/,
+  ];
+  for (const re of pats) { const m = t.match(re); if (m && m[1].trim().length > 1) return m[1].trim().slice(0, 60); }
+  return '';
+}
+const OTP_RE = /(şifre|sifre|doğrulama|dogrulama|onay kodu|tek kullanımlık|otp|one[- ]time|verification|код подтверждения|пароль)/i;
+
+/** Сырая запись с сервера → элемент «Входящих» (или null, если это не трата, например код из SMS). */
+function normalizeInboxItem(raw) {
+  if (!raw || typeof raw !== 'object' || !raw.id) return null;
+  const str = (v, n = 200) => (v == null ? '' : String(v)).trim().slice(0, n);
+  const text = str(raw.text, 600);
+  const source = ['wallet', 'sms', 'mail', 'test'].includes(raw.source) ? raw.source : text ? 'sms' : 'wallet';
+  let amount = null, currency = curFrom(str(raw.currency, 8));
+  if (raw.amount != null && raw.amount !== '') {
+    const m = typeof raw.amount === 'number' ? { amount: raw.amount, currency: null } : parseMoney(str(raw.amount, 60), true);
+    if (m) { amount = m.amount; currency = m.currency || currency; }
+  }
+  if (amount == null && text) {
+    const m = parseMoney(text, false);
+    if (m) { amount = m.amount; currency = m.currency || currency; }
+  }
+  if (amount == null && text && OTP_RE.test(text)) return null;
+  const at = Date.parse(raw.receivedAt) || Date.now();
+  return {
+    id: str(raw.id, 80), at, date: toISO(new Date(at)), source,
+    amount: amount > 0 ? round2(amount) : null,
+    currency: currency || (amount > 0 ? base() : null),
+    merchant: str(raw.merchant, 80) || merchantFromText(text),
+    card: str(raw.card, 60), text,
+  };
+}
+
+const INBOX_SOURCES = { wallet: ['💳', 'Apple Pay'], sms: ['💬', 'SMS'], mail: ['✉️', 'Почта'], test: ['🧪', 'Тест'] };
+const inboxSrc = (it) => INBOX_SOURCES[it.source] || INBOX_SOURCES.wallet;
+const timeOf = (ms) => { const d = new Date(ms); return `${pad(d.getHours())}:${pad(d.getMinutes())}`; };
+
+/** Похоже ли это на уже известную покупку (та же сумма из Wallet и из SMS, или уже внесена вручную). */
+function findDuplicate(it) {
+  if (!(it.amount > 0)) return '';
+  const st = S();
+  const o = st.inbox.find((x) => x.id !== it.id && x.amount === it.amount && x.currency === it.currency && x.source !== it.source && Math.abs(x.at - it.at) < 20 * 6e4);
+  if (o) return `${o.merchant || 'покупка'} из ${inboxSrc(o)[1]} в ${timeOf(o.at)}`;
+  const e = st.expenses.find((x) => x.amount === it.amount && x.currency === it.currency && x.date === it.date && Math.abs((x.createdAt || 0) - it.at) < 3 * 36e5);
+  if (e) return `«${e.comment || getCat(e.categoryId).name}» уже есть в истории`;
+  return '';
+}
+/** Способ оплаты: по названию карты, иначе «Apple Pay» или «Карта», если такие есть в списке. */
+function inboxPayment(it) {
+  const methods = S().settings.paymentMethods;
+  const card = (it.card || '').toLowerCase();
+  if (card) { const m = methods.find((p) => card.includes(p.toLowerCase()) || p.toLowerCase().includes(card)); if (m) return m; }
+  if (it.source === 'wallet') { const m = methods.find((p) => /apple\s*pay/i.test(p)); if (m) return m; }
+  return methods.find((p) => /^карта$/i.test(p)) || '';
+}
+/** Превращает элемент «Входящих» в покупку. Возвращает покупку или null, если нет курса (тогда — ручной ввод). */
+async function expenseFromInbox(it, categoryId) {
+  const b = base();
+  let r = { rate: 1, provider: '', date: '' }, pending = false;
+  if (it.currency !== b) {
+    const d = minISO(it.date, todayISO());
+    r = await Rates.get(it.currency, b, d, 5000).catch(() => null);
+    if (!r) { r = Rates.nearest(it.currency, b, d); pending = !!r; }
+    if (!r) return null;
+  }
+  const st = S();
+  const e = makeExpense({ amount: it.amount, currency: it.currency, rate: r.rate, rateProvider: r.provider, rateDate: r.date, ratePending: pending, categoryId, date: it.date, comment: it.merchant || '', payment: inboxPayment(it) });
+  e.createdAt = it.at;
+  e.source = it.source;
+  st.expenses.push(e);
+  learnMerchant(it.merchant, categoryId);
+  st.inbox = st.inbox.filter((x) => x.id !== it.id);
+  return e;
+}
+
+const Inbox = {
+  busy: false,
+  lastTry: 0,
+  configured() { const c = S().settings.inbox; return !!(c && c.url && c.token); },
+  /** Запрос к серверу «Входящих» с ключом в заголовке. */
+  async req(path, { method = 'GET', body, cfg } = {}) {
+    const c = cfg || S().settings.inbox;
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 9000);
+    try {
+      const res = await fetch(c.url.replace(/\/+$/, '') + path, {
+        method, cache: 'no-store', signal: ctrl.signal,
+        headers: { Authorization: 'Bearer ' + c.token, ...(body ? { 'Content-Type': 'application/json' } : {}) },
+        body: body ? JSON.stringify(body) : undefined,
+      });
+      let j = null;
+      try { j = await res.json(); } catch (e) { /* не JSON */ }
+      if (!res.ok) { const err = new Error((j && j.error) || 'HTTP ' + res.status); err.status = res.status; throw err; }
+      return j || {};
+    } finally { clearTimeout(timer); }
+  },
+  /**
+   * Забирает новые траты с сервера. Знакомые магазины добавляются сразу (если включено),
+   * остальные — во «Входящие». После сохранения записи удаляются с сервера.
+   * loud — показывать ошибки (ручное обновление).
+   */
+  async sync({ force = false, loud = false } = {}) {
+    if (!this.configured() || this.busy || navigator.onLine === false) return null;
+    if (!force && Date.now() - this.lastTry < 15000) return null;
+    this.busy = true;
+    this.lastTry = Date.now();
+    try {
+      const j = await this.req('/tx');
+      const items = Array.isArray(j.items) ? j.items : [];
+      const st = S(), seen = new Set(st.meta.inboxSeen);
+      const fresh = [];
+      items.forEach((raw) => {
+        if (!raw || !raw.id || seen.has(raw.id)) return;
+        seen.add(raw.id);
+        const it = normalizeInboxItem(raw);
+        if (it) fresh.push(it);
+      });
+      const auto = [];
+      for (const it of fresh.sort((a, b) => a.at - b.at)) {
+        const dup = findDuplicate(it);
+        if (dup) it.dup = dup;
+        const sug = suggestCategory(it.merchant);
+        if (sug) it.categoryId = sug.id;
+        if (!dup && sug && sug.learned && st.settings.inbox.autoAdd !== false && it.amount > 0 && it.currency) {
+          const e = await expenseFromInbox(it, sug.id).catch(() => null);
+          if (e) { auto.push(e); continue; }
+        }
+        st.inbox.push(it);
+      }
+      st.meta.inboxSeen = [...seen].slice(-400);
+      st.meta.inboxSyncAt = Date.now();
+      if (fresh.length) Store.commit(); else Store.save();
+      // удаляем с сервера только то, что уже сохранено на устройстве
+      const ids = items.map((x) => x && x.id).filter(Boolean);
+      if (ids.length) this.req('/ack', { method: 'POST', body: { ids } }).catch(() => { /* удалится при следующей синхронизации */ });
+      this.announce(auto, fresh.length - auto.length);
+      return { added: auto.length, pending: fresh.length - auto.length };
+    } catch (e) {
+      if (loud) toast(inboxErrorText(e));
+      return null;
+    } finally { this.busy = false; }
+  },
+  announce(auto, pending) {
+    if (!auto.length && !pending) return;
+    if (Sheet.stack.some((x) => x.sheet.classList.contains('sheet-inbox'))) return; // лист уже открыт и обновится сам
+    auto.forEach((e) => App.flash(e.id));
+    const what = auto.length === 1 ? `${auto[0].comment || getCat(auto[0].categoryId).name} · ${fmtMoney(auto[0].amount, auto[0].currency)}` : `${auto.length} ${plural(auto.length, 'трата', 'траты', 'трат')}`;
+    if (auto.length && pending) toast(`Из банка добавлено: ${what}. Ещё ${pending} ждут подтверждения`, { action: 'Разобрать', onAction: openInboxSheet });
+    else if (auto.length) toast(`Добавлено из банка: ${what}`);
+    else toast(`Новые траты из банка: ${pending}`, { action: 'Разобрать', onAction: openInboxSheet });
+  },
+};
+function inboxErrorText(e) {
+  if (e && e.status === 401) return 'Ключ не совпадает с TOKEN на сервере';
+  if (e && e.message === 'not_configured') return 'На сервере не настроены INBOX или TOKEN';
+  if (e && e.status) return `Сервер ответил ошибкой (${e.status})`;
+  return navigator.onLine === false ? 'Нет интернета' : 'Сервер недоступен — проверьте адрес';
+}
+
+/** Копирование в буфер обмена (с запасным способом для старых браузеров). */
+async function copyText(text, okMsg = 'Скопировано') {
+  try { await navigator.clipboard.writeText(text); toast(okMsg); return; } catch (e) { /* запасной способ */ }
+  const ta = document.createElement('textarea');
+  ta.value = text; ta.setAttribute('readonly', ''); ta.style.cssText = 'position:fixed;top:0;left:0;opacity:0';
+  document.body.append(ta); ta.select(); ta.setSelectionRange(0, text.length);
+  let ok = false;
+  try { ok = document.execCommand('copy'); } catch (e) { ok = false; }
+  ta.remove();
+  toast(ok ? okMsg : 'Не удалось скопировать');
+}
+
+/** Лист «Входящие»: подтверждение трат из банка. */
+function openInboxSheet() {
+  const existing = Sheet.stack.find((x) => x.sheet.classList.contains('sheet-inbox'));
+  if (existing) return;
+  let busy = false;
+  const s = Sheet.open({
+    title: 'Входящие', className: 'sheet-inbox',
+    right: Inbox.configured() ? '<button class="link-btn" data-ib-sync>Обновить</button>' : '',
+    body: '<div id="ib-box"></div>',
+    refresh: () => render(),
+  });
+  const box = $('#ib-box', s.sheet);
+  const byId = (id) => S().inbox.find((x) => x.id === id);
+  const render = () => {
+    const st = S();
+    if (!st.inbox.length) {
+      box.innerHTML = Inbox.configured()
+        ? `<div class="empty"><div class="em">📭</div><b>Новых трат нет</b>Они появятся здесь после оплаты Apple Pay или SMS от банка.${st.meta.inboxSyncAt ? `<br><small class="muted">Проверено в ${timeOf(st.meta.inboxSyncAt)}</small>` : ''}</div>`
+        : `<div class="empty"><div class="em">🏦</div><b>Не настроено</b>Подключите автоматический ввод трат из Apple Pay и SMS.</div><button class="btn btn-primary" data-ib-setup>Настроить</button>`;
+      return;
+    }
+    const cats = categoriesByRecency();
+    const ready = st.inbox.filter((it) => it.amount > 0 && it.categoryId && !it.dup);
+    box.innerHTML = '<p class="sheet-text">Выберите категорию и нажмите «Добавить». Категорию магазина приложение запомнит и в следующий раз добавит такую трату само.</p>'
+      + st.inbox.slice().sort((a, b) => b.at - a.at).map((it) => {
+        const [ico, label] = inboxSrc(it);
+        const order = it.categoryId ? [getCat(it.categoryId), ...cats.filter((c) => c.id !== it.categoryId)] : cats;
+        return `<div class="ib-item" data-id="${esc(it.id)}">
+          <div class="ib-meta">${ico} ${label}${it.card ? ' · ' + esc(it.card) : ''} · ${fmtDayHeader(it.date)}, ${timeOf(it.at)}</div>
+          <div class="ib-main"><div class="ib-title">${esc(it.merchant || (it.text ? it.text.slice(0, 70) : 'Без названия'))}</div>
+            <div class="ib-amt">${it.amount > 0 ? fmtMoney(it.amount, it.currency) : '<span class="warn-text">сумма?</span>'}</div></div>
+          ${it.text && it.merchant ? `<div class="ib-text">${esc(it.text)}</div>` : ''}
+          ${it.dup ? `<div class="ib-dup">⚠️ Возможно, дубль: ${esc(it.dup)}</div>` : ''}
+          <div class="chips scroll ib-cats">${order.map((c) => `<button type="button" class="chip sm${c.id === it.categoryId ? ' on' : ''}" data-ib-cat="${c.id}">${esc(c.emoji)} ${esc(c.name)}</button>`).join('')}</div>
+          <div class="btn-row"><button class="btn btn-secondary" data-ib-del>Удалить</button><button class="btn btn-secondary" data-ib-edit>Изменить</button><button class="btn btn-primary" data-ib-ok>Добавить</button></div>
+        </div>`;
+      }).join('')
+      + (ready.length > 1 ? `<button class="btn btn-primary" data-ib-all style="margin-top:6px">Добавить все с категорией (${ready.length})</button>` : '');
+  };
+  const openForm = (it) => {
+    openExpenseForm({
+      prefill: { amount: it.amount, currency: it.currency || base(), categoryId: it.categoryId, comment: it.merchant || '', payment: inboxPayment(it), date: it.date, keepDate: true, createdAt: it.at, title: 'Трата из банка' },
+      onSaved: (rec) => {
+        rec.source = it.source;
+        learnMerchant(it.merchant, rec.categoryId);
+        S().inbox = S().inbox.filter((x) => x.id !== it.id);
+      },
+    });
+  };
+  const addOne = async (it) => {
+    if (!(it.amount > 0) || !it.categoryId) { if (!it.categoryId && it.amount > 0) toast('Выберите категорию'); else openForm(it); return null; }
+    const e = await expenseFromInbox(it, it.categoryId);
+    if (!e) { toast('Нет курса — введите его вручную'); openForm(it); return null; }
+    return e;
+  };
+  const restore = (items, expenseIds) => {
+    const st = S();
+    st.expenses = st.expenses.filter((x) => !expenseIds.includes(x.id));
+    items.forEach((it) => { if (!st.inbox.some((x) => x.id === it.id)) st.inbox.push(it); });
+    Store.commit();
+  };
+  box.addEventListener('click', async (ev) => {
+    const t = ev.target;
+    if (t.closest('[data-ib-setup]')) { Sheet.close(s); openInboxSetupSheet(); return; }
+    if (busy) return;
+    if (t.closest('[data-ib-all]')) {
+      busy = true;
+      try {
+        const items = S().inbox.filter((it) => it.amount > 0 && it.categoryId && !it.dup).map((it) => ({ ...it }));
+        const added = [];
+        for (const it of items) { const e = await expenseFromInbox(byId(it.id) || it, it.categoryId); if (e) added.push(e.id); }
+        Store.commit();
+        toast(`Добавлено: ${added.length}`, { action: 'Отменить', onAction: () => restore(items, added) });
+      } finally { busy = false; }
+      return;
+    }
+    const card = t.closest('.ib-item');
+    const it = card && byId(card.dataset.id);
+    if (!it) return;
+    const cat = t.closest('[data-ib-cat]');
+    if (cat) {
+      it.categoryId = cat.dataset.ibCat;
+      Store.save();
+      $$('[data-ib-cat]', card).forEach((x) => x.classList.toggle('on', x === cat));
+      return;
+    }
+    if (t.closest('[data-ib-edit]')) { openForm(it); return; }
+    if (t.closest('[data-ib-del]')) {
+      const copy = { ...it };
+      S().inbox = S().inbox.filter((x) => x.id !== it.id);
+      Store.commit();
+      toast('Удалено из «Входящих»', { action: 'Отменить', onAction: () => restore([copy], []) });
+      return;
+    }
+    if (t.closest('[data-ib-ok]')) {
+      busy = true;
+      try {
+        const copy = { ...it };
+        const e = await addOne(it);
+        if (!e) return;
+        App.flash(e.id);
+        Store.commit();
+        if (navigator.vibrate) navigator.vibrate(8);
+        toast(`Добавлено: ${fmtMoney(e.amount, e.currency)}`, { action: 'Отменить', onAction: () => restore([copy], [e.id]) });
+      } finally { busy = false; }
+    }
+  });
+  const syncBtn = $('[data-ib-sync]', s.sheet);
+  if (syncBtn) syncBtn.addEventListener('click', async () => {
+    syncBtn.disabled = true;
+    const r = await Inbox.sync({ force: true, loud: true });
+    syncBtn.disabled = false;
+    if (r && !r.added && !r.pending) { render(); toast('Новых трат нет'); }
+    else if (r && r.added) toast(`Добавлено сразу (знакомые магазины): ${r.added}`);
+  });
+  render();
+}
+
+/** Настройка автоматического ввода: сервер, ключ, инструкции для «Команд». */
+function openInboxSetupSheet() {
+  const st = S(), c = st.settings.inbox;
+  const f = { url: c.url || '', token: c.token || '', autoAdd: c.autoAdd !== false };
+  const genToken = () => Array.from(crypto.getRandomValues(new Uint8Array(18)), (x) => x.toString(16).padStart(2, '0')).join('');
+  const cleanUrl = (u) => {
+    let v = String(u || '').trim().replace(/\s+/g, '');
+    if (!v) return '';
+    if (!/^https?:\/\//i.test(v)) v = 'https://' + v;
+    return v.replace(/[?#].*$/, '').replace(/\/+$/, '').replace(/\/(tx|ack)$/i, '');
+  };
+  const s = Sheet.open({
+    title: 'Траты из банка', left: 'Закрыть',
+    body: `<p class="sheet-text">Каждая оплата Apple Pay (и, по желанию, SMS от банка) автоматически отправляется на ваш личный сервер «Входящие», а приложение забирает новые траты при открытии. Настраивается один раз: бесплатный сервер на Cloudflare и автоматизация в «Командах».</p>
+      <div class="field"><div class="field-label">Адрес сервера</div><input class="input" id="is-url" type="url" inputmode="url" autocapitalize="none" autocomplete="off" spellcheck="false" placeholder="https://traty-inbox.имя.workers.dev" value="${esc(f.url)}"></div>
+      <div class="field"><div class="field-label">Секретный ключ (TOKEN)</div><input class="input" id="is-token" type="text" autocapitalize="none" autocomplete="off" spellcheck="false" placeholder="Нажмите «Создать ключ»" value="${esc(f.token)}">
+        <div class="btn-row"><button class="btn btn-secondary" data-gen>Создать ключ</button><button class="btn btn-secondary" data-copy-token>Копировать</button></div></div>
+      <div class="field"><div class="list"><div class="row is-auto-row"><span class="ri">⚡</span><span class="rl">Добавлять сразу<small>магазины, чья категория уже известна</small></span>
+        <div class="seg" id="is-auto"><button data-v="1" class="${f.autoAdd ? 'on' : ''}">Да</button><button data-v="0" class="${f.autoAdd ? '' : 'on'}">Нет</button></div></div></div></div>
+      <div class="btn-row"><button class="btn btn-secondary" data-check>Проверить связь</button><button class="btn btn-secondary" data-test>Тестовая трата</button></div>
+      <div class="is-status" id="is-status"></div>
+
+      <div class="group-title">1. Сервер (Cloudflare, бесплатно)</div>
+      <ol class="steps">
+        <li><span class="n">1</span><span>Зарегистрируйтесь на <b>dash.cloudflare.com</b>. Удобнее делать с компьютера.</span></li>
+        <li><span class="n">2</span><span><b>Storage &amp; Databases → KV → Create</b>, имя <b>traty-inbox</b>.</span></li>
+        <li><span class="n">3</span><span><b>Workers &amp; Pages → Create → Worker</b>, назовите <b>traty-inbox</b> и нажмите <b>Deploy</b>. Затем <b>Edit code</b>: замените весь код содержимым файла <b>inbox-worker/worker.js</b> из репозитория приложения и снова нажмите <b>Deploy</b>.</span></li>
+        <li><span class="n">4</span><span>В воркере: <b>Settings → Bindings → Add → KV namespace</b>. Имя переменной <b>INBOX</b>, хранилище — traty-inbox.</span></li>
+        <li><span class="n">5</span><span><b>Settings → Variables and Secrets → Add</b>: тип <b>Secret</b>, имя <b>TOKEN</b>, значение — ключ из поля выше.</span></li>
+        <li><span class="n">6</span><span>Скопируйте адрес воркера (…<b>.workers.dev</b>) в поле «Адрес сервера», нажмите «Проверить связь».</span></li>
+      </ol>
+
+      <div class="group-title">2. Команда для Apple Pay</div>
+      <ol class="steps">
+        <li><span class="n">1</span><span>Приложение <b>«Команды»</b> → вкладка <b>«Автоматизация»</b> → <b>«+»</b> → <b>«Транзакция»</b>.</span></li>
+        <li><span class="n">2</span><span>Выберите все карты, отметьте <b>«Запускать сразу»</b> → <b>«Далее»</b> → <b>«Новая пустая команда»</b>.</span></li>
+        <li><span class="n">3</span><span>Добавьте действие <b>«Получить содержимое URL»</b>. В адрес вставьте ссылку из кнопки ниже.</span></li>
+        <li><span class="n">4</span><span>Раскройте действие (стрелка): метод <b>POST</b>, текст запроса <b>JSON</b>. Добавьте текстовые поля:<br>
+          <code>amount</code> → переменная <b>«Входные данные команды»</b>, свойство <b>«Сумма»</b>;<br>
+          <code>merchant</code> → свойство <b>«Продавец»</b>;<br>
+          <code>card</code> → свойство <b>«Карта»</b> (необязательно);<br>
+          <code>source</code> → текст <b>wallet</b>.<br>
+          <small class="muted">Названия свойств в iOS могут немного отличаться.</small></span></li>
+        <li><span class="n">5</span><span>Оплатите что-нибудь через Apple Pay и откройте «Траты» — покупка появится во «Входящих».</span></li>
+      </ol>
+      <button class="btn btn-primary" data-copy-url>Скопировать ссылку для команды</button>
+
+      <div class="group-title">3. SMS банка (по желанию)</div>
+      <ol class="steps">
+        <li><span class="n">1</span><span>Включите SMS об оплатах картой в приложении банка (например, в Ziraat Mobil — уведомления по карте).</span></li>
+        <li><span class="n">2</span><span>«Автоматизация» → «+» → <b>«Сообщение»</b>. Отправитель — номер банка (или условие «Сообщение содержит» — слово из SMS о покупке, например <b>harcama</b>). Отметьте «Запускать сразу».</span></li>
+        <li><span class="n">3</span><span>То же действие «Получить содержимое URL» с той же ссылкой, POST, JSON: <code>text</code> → <b>«Входные данные команды»</b> (текст сообщения), <code>source</code> → <b>sms</b>.</span></li>
+      </ol>
+      <div class="note">Сумму, валюту и магазин приложение найдёт в тексте SMS само. Одна и та же покупка из Apple Pay и SMS будет помечена как возможный дубль.</div>`,
+    foot: '<button class="btn btn-primary" data-save>Сохранить</button>',
+  });
+  const q = (sel) => $(sel, s.sheet);
+  const read = () => ({ url: cleanUrl(q('#is-url').value), token: q('#is-token').value.trim(), autoAdd: f.autoAdd });
+  const status = (html) => { q('#is-status').innerHTML = html; };
+  const apply = () => {
+    const v = read();
+    q('#is-url').value = v.url;
+    S().settings.inbox = v;
+    Store.save();
+    return v;
+  };
+  const needBoth = (v) => {
+    if (!v.url) { toast('Укажите адрес сервера'); q('#is-url').focus(); return false; }
+    if (!v.token) { toast('Создайте или вставьте ключ'); return false; }
+    return true;
+  };
+  q('[data-gen]').addEventListener('click', async () => {
+    if (q('#is-token').value.trim()) {
+      const ok = await confirmSheet({ title: 'Создать новый ключ?', text: 'Старый ключ перестанет подходить: его нужно будет заменить в Cloudflare (TOKEN) и в ссылке команды.', ok: 'Создать' });
+      if (!ok) return;
+    }
+    q('#is-token').value = genToken();
+  });
+  q('[data-copy-token]').addEventListener('click', () => { const v = read(); if (v.token) copyText(v.token, 'Ключ скопирован'); else toast('Сначала создайте ключ'); });
+  q('[data-copy-url]').addEventListener('click', () => {
+    const v = read();
+    if (!needBoth(v)) return;
+    copyText(`${v.url}/tx?key=${encodeURIComponent(v.token)}`, 'Ссылка для команды скопирована');
+  });
+  q('#is-auto').addEventListener('click', (e) => {
+    const x = e.target.closest('[data-v]');
+    if (!x) return;
+    f.autoAdd = x.dataset.v === '1';
+    $$('#is-auto button', s.sheet).forEach((b) => b.classList.toggle('on', b === x));
+  });
+  q('[data-check]').addEventListener('click', async () => {
+    const v = apply();
+    if (!needBoth(v)) return;
+    status('<span class="spinner"></span> Проверяю…');
+    try {
+      const j = await Inbox.req('/', { cfg: v });
+      status(`✅ Сервер на связи${j.pending != null ? ` · ждут на сервере: ${j.pending}` : ''}`);
+    } catch (e) { status(`❌ ${esc(inboxErrorText(e))}`); }
+  });
+  q('[data-test]').addEventListener('click', async () => {
+    const v = apply();
+    if (!needBoth(v)) return;
+    status('<span class="spinner"></span> Отправляю тестовую трату…');
+    try {
+      await Inbox.req('/tx', { method: 'POST', body: { amount: '₺1,00', merchant: 'Тестовая трата', source: 'test' }, cfg: v });
+      await Inbox.sync({ force: true, loud: true });
+      status('✅ Тестовая трата пришла — она во «Входящих», её можно удалить.');
+    } catch (e) { status(`❌ ${esc(inboxErrorText(e))}`); }
+  });
+  q('[data-save]').addEventListener('click', () => {
+    const v = apply();
+    if (v.url && !v.token) { toast('Создайте или вставьте ключ'); return; }
+    Sheet.close(s);
+    Store.commit();
+    toast(v.url ? 'Сохранено' : 'Автоматический ввод отключён');
+    Inbox.sync({ force: true, loud: true });
+  });
+}
+
+/** Запомненные магазины и их категории. */
+function openMerchantRulesSheet() {
+  const s = Sheet.open({ title: 'Магазины', body: '<div id="mr-box"></div>', refresh: () => render() });
+  const box = $('#mr-box', s.sheet);
+  const render = () => {
+    const R = S().merchantRules;
+    const keys = Object.keys(R).filter((k) => !k.startsWith('#')).sort();
+    box.innerHTML = '<p class="sheet-text">Когда вы подтверждаете трату из банка, приложение запоминает категорию магазина. Нажмите на магазин, чтобы забыть его.</p>'
+      + (keys.length ? `<div class="list">${keys.map((k) => { const c = getCat(R[k]); return `<button class="row" data-k="${esc(k)}"><span class="ri">${esc(c.emoji)}</span><span class="rl">${esc(k)}</span><span class="rv">${esc(c.name)}</span></button>`; }).join('')}</div>`
+        : '<div class="empty">Пока ничего не запомнено</div>');
+  };
+  box.addEventListener('click', async (e) => {
+    const x = e.target.closest('[data-k]');
+    if (!x) return;
+    const k = x.dataset.k;
+    const ok = await confirmSheet({ title: k, text: 'Забыть категорию этого магазина? Следующая трата из него будет ждать подтверждения во «Входящих».', ok: 'Забыть', danger: true });
+    if (!ok) return;
+    const R = S().merchantRules, first = '#' + k.split(' ')[0];
+    delete R[k];
+    if (!Object.keys(R).some((o) => !o.startsWith('#') && '#' + o.split(' ')[0] === first)) delete R[first];
+    Store.commit();
+  });
+  render();
 }
 
 /* =====================================================================
@@ -2609,6 +3175,9 @@ const Actions = {
     if (ok) { Rates.clear(); renderSettings(); toast('Кэш курсов очищен'); }
   },
   'install-hint': () => openInstallSheet(),
+  inbox: () => openInboxSheet(),
+  'inbox-setup': () => openInboxSetupSheet(),
+  'merchant-rules': () => openMerchantRulesSheet(),
   'install-android': async () => { if (!deferredInstall) return; deferredInstall.prompt(); await deferredInstall.userChoice.catch(() => null); deferredInstall = null; renderSettings(); },
   wipe: async () => {
     const ok = await confirmSheet({ title: 'Удалить все данные?', text: 'Покупки, категории, шаблоны и настройки будут удалены с этого устройства. Сначала сделайте экспорт JSON, если данные нужны.', ok: 'Удалить всё', danger: true });
@@ -2668,13 +3237,14 @@ function bindStatic() {
   $('#import-file').addEventListener('change', (e) => { const file = e.target.files[0]; e.target.value = ''; if (file) handleImportFile(file); });
   bindLongPress($('#home-templates'), '[data-action="tpl"]', (el) => openTemplateEditor(el.dataset.id));
   darkMQ.addEventListener('change', () => { if (S().settings.theme === 'system') applyTheme(); });
-  window.addEventListener('online', () => { resolvePending(); App.refresh(); });
+  window.addEventListener('online', () => { resolvePending(); App.refresh(); Inbox.sync(); });
   window.addEventListener('offline', () => toast('Нет интернета — курсы можно ввести вручную'));
   window.addEventListener('beforeinstallprompt', (e) => { e.preventDefault(); deferredInstall = e; App.dirty.add('settings'); });
   document.addEventListener('visibilitychange', () => {
     if (document.hidden) return;
     if (App.day !== todayISO()) { App.day = todayISO(); Period.anchor = todayISO(); App.refresh(); } // наступил новый день
     else if (App.tab === 'home') renderBanners();
+    Inbox.sync();
   });
 }
 
@@ -2690,6 +3260,7 @@ function init() {
   maybeShowInstallHint();
   if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});
   setTimeout(resolvePending, 600);
+  setTimeout(() => Inbox.sync(), 900);
 }
 document.addEventListener('DOMContentLoaded', init);
 </script>
