@@ -17,8 +17,11 @@
      POST /register   новый личный ключ → { ok, key }   (без ключа; не больше 5 в день с адреса)
      GET  /           проверка связи → { ok, pending }
      POST /tx         новая трата: JSON (или форма, или параметры URL)
-                      { amount, currency?, merchant?, card?, text?, source? }
+                      { amount, currency?, merchant?, card?, text?, source?, category?, comment?, time? }
                       amount можно передавать текстом как есть: «₺1.234,50»
+     POST /batch      пачка трат из файла-очереди «Команд» (работает и после офлайна):
+                      по строке на трату: время|источник|сумма|категория|комментарий|карта
+                      (или строка JSON). Повторная отправка той же строки не создаёт дубль.
      GET  /tx         свои ожидающие траты → { ok, items: [...] }
      POST /ack        удалить забранные траты: { ids: [...] }
    ===================================================================== */
@@ -27,7 +30,9 @@ const TTL_SECONDS = 30 * 24 * 3600; // необработанные траты �
 const MAX_ITEMS = 200;
 const REG_PER_IP_PER_DAY = 5;
 const REG_PER_DAY = 50;
-const FIELDS = { amount: 60, currency: 8, merchant: 120, card: 80, text: 1000, source: 16, sender: 80 };
+const FIELDS = { amount: 60, currency: 8, merchant: 120, card: 80, text: 1000, source: 16, sender: 80, category: 60, comment: 140, time: 40 };
+const BATCH_COLUMNS = ['time', 'source', 'amount', 'category', 'comment', 'card'];
+const MAX_BATCH = 100;
 
 const CORS = {
   'Access-Control-Allow-Origin': '*',
@@ -58,6 +63,36 @@ async function userId(key) {
 
 function newKey() {
   return Array.from(crypto.getRandomValues(new Uint8Array(18)), (b) => b.toString(16).padStart(2, '0')).join('');
+}
+
+/** Поля траты из произвольного объекта (с обрезкой длины). */
+function pickFields(body) {
+  const item = {};
+  for (const [k, max] of Object.entries(FIELDS)) {
+    const v = body[k];
+    if (v == null || v === '') continue;
+    item[k] = typeof v === 'number' && k === 'amount' ? v : String(typeof v === 'object' ? JSON.stringify(v) : v).trim().slice(0, max);
+  }
+  // SMS в очереди: текст сообщения приходит в колонке «комментарий»
+  if (item.source === 'sms' && !item.text && item.comment) { item.text = item.comment; delete item.comment; }
+  return item;
+}
+const isEmptyItem = (item) => item.amount == null && !item.text && !item.merchant && !item.comment;
+
+/** Строка файла-очереди → поля траты. */
+function parseLine(line) {
+  if (line.startsWith('{')) { try { return pickFields(JSON.parse(line)); } catch (e) { /* как обычный текст */ } }
+  const parts = line.split('|');
+  if (parts.length < 3) return pickFields({ text: line });
+  const obj = {};
+  BATCH_COLUMNS.forEach((k, i) => { if (parts[i] != null) obj[k] = parts[i]; });
+  if (parts.length > BATCH_COLUMNS.length) obj.card = parts.slice(BATCH_COLUMNS.length - 1).join('|');
+  return pickFields(obj);
+}
+
+async function sha16(text) {
+  const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text));
+  return Array.from(new Uint8Array(buf).slice(0, 8), (b) => b.toString(16).padStart(2, '0')).join('');
 }
 
 /** Тело запроса: JSON, форма или ничего (тогда — параметры URL). */
@@ -136,15 +171,26 @@ export default {
       return json({ ok: true, app: 'traty-inbox', pending: page.keys.length });
     }
 
+    if (path === '/batch' && request.method === 'POST') {
+      const lines = (await request.text()).replace(/^\uFEFF/, '').split(/\r?\n/).map((l) => l.trim()).filter(Boolean).slice(0, MAX_BATCH);
+      const receivedAt = new Date().toISOString();
+      let added = 0;
+      for (const line of lines) {
+        const item = parseLine(line);
+        if (isEmptyItem(item)) continue;
+        // id зависит от содержимого строки: повторная отправка перезапишет ту же запись, а приложение её уже знает
+        item.id = 'b-' + await sha16(uid + '|' + line);
+        item.receivedAt = receivedAt;
+        await env.INBOX.put(prefix + item.id, JSON.stringify(item), { expirationTtl: TTL_SECONDS });
+        added++;
+      }
+      return json({ ok: true, added });
+    }
+
     if (path === '/tx' && request.method === 'POST') {
       const body = await readBody(request, url);
-      const item = {};
-      for (const [k, max] of Object.entries(FIELDS)) {
-        const v = body[k];
-        if (v == null || v === '') continue;
-        item[k] = typeof v === 'number' && k === 'amount' ? v : String(typeof v === 'object' ? JSON.stringify(v) : v).slice(0, max);
-      }
-      if (item.amount == null && !item.text && !item.merchant) return json({ ok: false, error: 'empty' }, 400);
+      const item = pickFields(body);
+      if (isEmptyItem(item)) return json({ ok: false, error: 'empty' }, 400);
       const now = Date.now();
       item.id = `${now.toString(36)}-${crypto.randomUUID().slice(0, 8)}`;
       item.receivedAt = new Date(now).toISOString();

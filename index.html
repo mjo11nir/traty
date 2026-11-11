@@ -603,7 +603,7 @@ details.adv[open] summary { margin-bottom: 10px; }
 /* =====================================================================
    1. Константы и утилиты
    ===================================================================== */
-const APP_VERSION = '1.2.0';
+const APP_VERSION = '1.3.0';
 const STORAGE_KEY = 'traty.data.v1';
 const RATES_KEY = 'traty.rates.v1';
 const THEME_KEY = 'traty.theme';
@@ -1446,7 +1446,7 @@ function renderBanners() {
   const st = S(), html = [];
   if (st.inbox.length) {
     const n = st.inbox.length;
-    html.push(`<div class="banner"><div class="ico">📥</div><div class="txt"><b>${n} ${plural(n, 'трата', 'траты', 'трат')} из банка</b>Пришли из Apple Pay или SMS — выберите категорию и подтвердите.
+    html.push(`<div class="banner"><div class="ico">📥</div><div class="txt"><b>${n} ${plural(n, 'трата ждёт', 'траты ждут', 'трат ждут')} подтверждения</b>Пришли из Apple Pay, SMS или быстрой записи — выберите категорию и подтвердите.
       <div class="acts"><button class="link-btn" data-action="inbox">Разобрать</button></div></div></div>`);
   }
   if (backupDue()) {
@@ -2614,12 +2614,27 @@ function merchantFromText(text) {
 }
 const OTP_RE = /(şifre|sifre|doğrulama|dogrulama|onay kodu|tek kullanımlık|otp|one[- ]time|verification|код подтверждения|пароль)/i;
 
+/** Категория по тексту из команды: «🛒 Еда», «Еда» или просто эмодзи. */
+function categoryFromText(t) {
+  const s = String(t || '').trim();
+  if (!s) return null;
+  const norm = (x) => String(x).toLowerCase().replace(/ё/g, 'е').replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
+  const n = norm(s), cats = S().categories;
+  return cats.find((c) => n && norm(c.name) === n) || cats.find((c) => c.emoji && s.startsWith(c.emoji)) || null;
+}
+/** Время покупки из команды (ISO 8601). Если его нет или оно странное — время получения сервером. */
+function inboxTime(raw) {
+  const t = Date.parse(raw.time), now = Date.now();
+  if (t && t <= now + 10 * 6e4 && t >= now - 60 * DAY_MS) return t;
+  return Date.parse(raw.receivedAt) || now;
+}
+
 /** Сырая запись с сервера → элемент «Входящих» (или null, если это не трата, например код из SMS). */
 function normalizeInboxItem(raw) {
   if (!raw || typeof raw !== 'object' || !raw.id) return null;
   const str = (v, n = 200) => (v == null ? '' : String(v)).trim().slice(0, n);
   const text = str(raw.text, 600);
-  const source = ['wallet', 'sms', 'mail', 'test'].includes(raw.source) ? raw.source : text ? 'sms' : 'wallet';
+  const source = ['wallet', 'sms', 'mail', 'test', 'quick'].includes(raw.source) ? raw.source : text ? 'sms' : 'wallet';
   let amount = null, currency = curFrom(str(raw.currency, 8));
   if (raw.amount != null && raw.amount !== '') {
     const m = typeof raw.amount === 'number' ? { amount: raw.amount, currency: null } : parseMoney(str(raw.amount, 60), true);
@@ -2630,23 +2645,25 @@ function normalizeInboxItem(raw) {
     if (m) { amount = m.amount; currency = m.currency || currency; }
   }
   if (amount == null && text && OTP_RE.test(text)) return null;
-  const at = Date.parse(raw.receivedAt) || Date.now();
+  const at = inboxTime(raw);
+  const cat = categoryFromText(raw.category);
   return {
     id: str(raw.id, 80), at, date: toISO(new Date(at)), source,
     amount: amount > 0 ? round2(amount) : null,
     currency: currency || (amount > 0 ? base() : null),
-    merchant: str(raw.merchant, 80) || merchantFromText(text),
+    merchant: str(raw.merchant, 80) || str(raw.comment, 140) || merchantFromText(text),
     card: str(raw.card, 60), text,
+    ...(cat ? { categoryId: cat.id, catFixed: true } : {}),
   };
 }
 
-const INBOX_SOURCES = { wallet: ['💳', 'Apple Pay'], sms: ['💬', 'SMS'], mail: ['✉️', 'Почта'], test: ['🧪', 'Тест'] };
+const INBOX_SOURCES = { wallet: ['💳', 'Apple Pay'], sms: ['💬', 'SMS'], mail: ['✉️', 'Почта'], test: ['🧪', 'Тест'], quick: ['⚡', 'Быстрая запись'] };
 const inboxSrc = (it) => INBOX_SOURCES[it.source] || INBOX_SOURCES.wallet;
 const timeOf = (ms) => { const d = new Date(ms); return `${pad(d.getHours())}:${pad(d.getMinutes())}`; };
 
 /** Похоже ли это на уже известную покупку (та же сумма из Wallet и из SMS, или уже внесена вручную). */
 function findDuplicate(it) {
-  if (!(it.amount > 0)) return '';
+  if (!(it.amount > 0) || it.source === 'quick') return ''; // быструю запись человек сделал сам — не дубль
   const st = S();
   const o = st.inbox.find((x) => x.id !== it.id && x.amount === it.amount && x.currency === it.currency && x.source !== it.source && Math.abs(x.at - it.at) < 20 * 6e4);
   if (o) return `${o.merchant || 'покупка'} из ${inboxSrc(o)[1]} в ${timeOf(o.at)}`;
@@ -2656,6 +2673,7 @@ function findDuplicate(it) {
 }
 /** Способ оплаты: по названию карты, иначе «Apple Pay» или «Карта», если такие есть в списке. */
 function inboxPayment(it) {
+  if (it.source === 'quick') return ''; // способ оплаты неизвестен (могли быть и наличные)
   const methods = S().settings.paymentMethods;
   const card = (it.card || '').toLowerCase();
   if (card) { const m = methods.find((p) => card.includes(p.toLowerCase()) || p.toLowerCase().includes(card)); if (m) return m; }
@@ -2726,10 +2744,15 @@ const Inbox = {
       });
       const auto = [];
       for (const it of fresh.sort((a, b) => a.at - b.at)) {
+        // быстрая запись с категорией — сразу в историю
+        if (it.catFixed && it.amount > 0 && it.currency) {
+          const e = await expenseFromInbox(it, it.categoryId).catch(() => null);
+          if (e) { auto.push(e); continue; }
+        }
         const dup = findDuplicate(it);
         if (dup) it.dup = dup;
         const sug = suggestCategory(it.merchant);
-        if (sug) it.categoryId = sug.id;
+        if (sug && !it.catFixed) it.categoryId = sug.id;
         if (!dup && sug && sug.learned && st.settings.inbox.autoAdd !== false && it.amount > 0 && it.currency) {
           const e = await expenseFromInbox(it, sug.id).catch(() => null);
           if (e) { auto.push(e); continue; }
@@ -2754,8 +2777,8 @@ const Inbox = {
     if (Sheet.stack.some((x) => x.sheet.classList.contains('sheet-inbox'))) return; // лист уже открыт и обновится сам
     auto.forEach((e) => App.flash(e.id));
     const what = auto.length === 1 ? `${auto[0].comment || getCat(auto[0].categoryId).name} · ${fmtMoney(auto[0].amount, auto[0].currency)}` : `${auto.length} ${plural(auto.length, 'трата', 'траты', 'трат')}`;
-    if (auto.length && pending) toast(`Из банка добавлено: ${what}. Ещё ${pending} ждут подтверждения`, { action: 'Разобрать', onAction: openInboxSheet });
-    else if (auto.length) toast(`Добавлено из банка: ${what}`);
+    if (auto.length && pending) toast(`Добавлено автоматически: ${what}. Ещё ${pending} ждут подтверждения`, { action: 'Разобрать', onAction: openInboxSheet });
+    else if (auto.length) toast(`Добавлено автоматически: ${what}`);
     else toast(`Новые траты из банка: ${pending}`, { action: 'Разобрать', onAction: openInboxSheet });
   },
 };
@@ -2922,25 +2945,44 @@ function openInboxSetupSheet() {
         <p class="sheet-text" style="margin-top:10px;font-size:13.5px">Приложение получит личный ключ: ваши траты видны только по нему.</p>`}
       <div class="is-status" id="is-status"></div>
 
-      <div class="group-title">Команда для Apple Pay</div>
+      <div class="note">Команды работают и без интернета: каждая трата сначала записывается в файл-очередь на iPhone, а потом отправляется весь файл. Нет связи — команда покажет ошибку, но трата останется в файле и уйдёт со следующей командой. Время покупки сохранится.</div>
+      ${connected ? '' : '<p class="sheet-text">Чтобы получить ссылку для команд, сначала нажмите «Подключить» выше.</p>'}
+
+      <div class="group-title">Блок «Отправить» (в конце каждой команды)</div>
       <ol class="steps">
-        <li><span class="n">1</span><span>${connected ? 'Нажмите кнопку ниже — ссылка скопируется.' : 'Сначала нажмите «Подключить» выше, затем — «Скопировать ссылку для команды».'}</span></li>
-        <li><span class="n">2</span><span>Приложение <b>«Команды»</b> → <b>«Автоматизация»</b> → <b>«+»</b> → <b>«Транзакция»</b>. Выберите все карты, включите <b>«Запускать сразу»</b> → «Далее» → <b>«Новая пустая команда»</b>.</span></li>
-        <li><span class="n">3</span><span>Добавьте действие <b>«Получить содержимое URL»</b> (Get Contents of URL) и вставьте ссылку.</span></li>
-        <li><span class="n">4</span><span>Раскройте действие: метод <b>POST</b>, текст запроса <b>JSON</b>. Добавьте текстовые поля:<br>
-          <code>amount</code> → <b>«Входные данные команды»</b> (Shortcut Input), свойство <b>«Сумма»</b> (Amount);<br>
-          <code>merchant</code> → свойство <b>«Продавец»</b> (Merchant);<br>
-          <code>card</code> → свойство <b>«Карта»</b> (Card), необязательно;<br>
-          <code>source</code> → текст <b>wallet</b>.</span></li>
-        <li><span class="n">5</span><span>Оплатите что-нибудь через Apple Pay и откройте «Траты» — покупка появится во «Входящих».</span></li>
+        <li><span class="n">1</span><span><b>«Добавить в текстовый файл»</b> (Append to Text File): текст из предыдущего шага, файл <code>traty-queue.txt</code>, «Новая строка» — вкл.</span></li>
+        <li><span class="n">2</span><span><b>«Получить файл»</b> (Get File): <code>traty-queue.txt</code>, «Ошибка, если не найдено» — выкл.</span></li>
+        <li><span class="n">3</span><span><b>«Получить содержимое URL»</b> (Get Contents of URL): ссылка из кнопки ниже, метод <b>POST</b>, тело запроса <b>«Файл»</b> → файл из шага 2.</span></li>
+        <li><span class="n">4</span><span><b>«Удалить файлы»</b> (Delete Files): файл из шага 2, «Подтверждать удаление» — выкл.</span></li>
       </ol>
-      ${connected ? '<button class="btn btn-primary" data-copy-url>Скопировать ссылку для команды</button>' : ''}
+      ${connected ? '<button class="btn btn-primary" data-copy-url>Скопировать ссылку для команд</button>' : ''}
+
+      <div class="group-title">Быстрая запись — двойной тап по крышке</div>
+      <ol class="steps">
+        <li><span class="n">1</span><span>«Команды» → вкладка <b>«Команды»</b> → <b>«+»</b>, назовите <b>Трата</b>.</span></li>
+        <li><span class="n">2</span><span><b>«Запросить ввод»</b> (Ask for Input): тип <b>Число</b>, вопрос «Сколько?».</span></li>
+        <li><span class="n">3</span><span><b>«Текст»</b> — вставьте список категорий <button class="chip sm" data-copy="cats">Скопировать категории</button> → <b>«Разделить текст»</b> (Split Text) по новым строкам → <b>«Выбрать из списка»</b> (Choose from List).</span></li>
+        <li><span class="n">4</span><span><b>«Запросить ввод»</b>: тип <b>Текст</b>, вопрос «Комментарий» (можно оставлять пустым).</span></li>
+        <li><span class="n">5</span><span><b>«Текст»</b> — вставьте шаблон <button class="chip sm" data-copy="quick">Скопировать шаблон</button> и замените слова переменными: ДАТА → <b>«Текущая дата»</b> (нажмите на неё → формат <b>ISO 8601</b>), СУММА → ответ «Сколько?», КАТЕГОРИЯ → <b>«Выбранный объект»</b>, КОММЕНТАРИЙ → ответ «Комментарий».</span></li>
+        <li><span class="n">6</span><span>Блок «Отправить» (4 действия выше). По желанию — <b>«Показать уведомление»</b> «Записано».</span></li>
+        <li><span class="n">7</span><span>Настройки iPhone → <b>Универсальный доступ → Касание → Коснуться сзади → Двойное касание</b> → команда <b>Трата</b>.</span></li>
+      </ol>
+      <p class="sheet-text">Такая трата сразу попадает в историю с выбранной категорией — её можно изменить, как обычную покупку.</p>
+
+      <div class="group-title">Apple Pay</div>
+      <ol class="steps">
+        <li><span class="n">1</span><span>«Автоматизация» → <b>«+»</b> → <b>«Транзакция»</b>: все карты, <b>«Запускать сразу»</b> → «Новая пустая команда».</span></li>
+        <li><span class="n">2</span><span><b>«Текст»</b> — шаблон <button class="chip sm" data-copy="wallet">Скопировать шаблон</button>, замените: ДАТА → «Текущая дата» (ISO 8601), СУММА → <b>«Входные данные команды»</b> → свойство <b>«Сумма»</b> (Amount), ПРОДАВЕЦ → <b>«Продавец»</b> (Merchant), КАРТА → <b>«Карта»</b> (Card).</span></li>
+        <li><span class="n">3</span><span>Блок «Отправить».</span></li>
+      </ol>
+      <p class="sheet-text">Если у вас уже есть команда для Apple Pay с полями JSON — она продолжит работать, но без интернета трата потеряется. Лучше заменить её действия на эти.</p>
 
       <div class="group-title">SMS банка (по желанию)</div>
       <ol class="steps">
         <li><span class="n">1</span><span>Включите SMS об оплатах картой в приложении банка (например, в Ziraat Mobil — уведомления по карте).</span></li>
-        <li><span class="n">2</span><span>«Автоматизация» → «+» → <b>«Сообщение»</b>. Отправитель — номер банка (или «Сообщение содержит» — слово из SMS о покупке, например <b>harcama</b>). Включите «Запускать сразу».</span></li>
-        <li><span class="n">3</span><span>То же действие «Получить содержимое URL» с той же ссылкой, POST, JSON: <code>text</code> → <b>«Входные данные команды»</b>, <code>source</code> → <b>sms</b>.</span></li>
+        <li><span class="n">2</span><span>«Автоматизация» → «+» → <b>«Сообщение»</b>: отправитель — банк (или «Сообщение содержит» <b>harcama</b>), «Запускать сразу».</span></li>
+        <li><span class="n">3</span><span><b>«Заменить текст»</b> (Replace Text) во «Входных данных команды»: найти <code>\\n</code>, заменить на пробел, «Регулярное выражение» — вкл.</span></li>
+        <li><span class="n">4</span><span><b>«Текст»</b> — шаблон <button class="chip sm" data-copy="sms">Скопировать шаблон</button>, замените: ДАТА → «Текущая дата» (ISO 8601), ТЕКСТ → «Обновлённый текст». Затем блок «Отправить».</span></li>
       </ol>
 
       <details class="adv"${own ? ' open' : ''}><summary>Свой сервер и ключ</summary>
@@ -3009,7 +3051,20 @@ function openInboxSetupSheet() {
   const copyUrl = q('[data-copy-url]');
   if (copyUrl) copyUrl.addEventListener('click', () => {
     const v = S().settings.inbox;
-    copyText(`${v.url}/tx?key=${encodeURIComponent(v.token)}`, 'Ссылка для команды скопирована');
+    copyText(`${v.url}/batch?key=${encodeURIComponent(v.token)}`, 'Ссылка для команд скопирована');
+  });
+  // шаблоны строк для файла-очереди: время|источник|сумма|категория|комментарий|карта
+  const COPY_TEXTS = {
+    cats: () => [S().categories.map((c) => `${c.emoji} ${c.name}`).join('\n'), 'Список категорий скопирован'],
+    quick: () => ['ДАТА|quick|СУММА|КАТЕГОРИЯ|КОММЕНТАРИЙ|', 'Шаблон скопирован'],
+    wallet: () => ['ДАТА|wallet|СУММА||ПРОДАВЕЦ|КАРТА', 'Шаблон скопирован'],
+    sms: () => ['ДАТА|sms|||ТЕКСТ|', 'Шаблон скопирован'],
+  };
+  s.body.addEventListener('click', (e) => {
+    const x = e.target.closest('[data-copy]');
+    if (!x || !COPY_TEXTS[x.dataset.copy]) return;
+    const [text, msg] = COPY_TEXTS[x.dataset.copy]();
+    copyText(text, msg);
   });
   q('[data-gen]').addEventListener('click', async () => {
     if (q('#is-token').value.trim()) {
