@@ -10,6 +10,8 @@
 | `manifest.json` | Название, иконки, режим `standalone` |
 | `sw.js` | Service worker: кэш оболочки и Chart.js для работы без интернета |
 | `icons/` | `apple-touch-icon.png` (180), `icon-192.png`, `icon-512.png`, `icon-maskable-512.png` |
+| `CHANGELOG.md` | История версий |
+| `CLAUDE.md` | Правила разработки проекта (для Claude) |
 | `inbox-worker/` | Необязательный сервер «Входящие» для автоматического ввода трат из Apple Pay и SMS (Cloudflare Worker) |
 
 ## Как установить на iPhone
