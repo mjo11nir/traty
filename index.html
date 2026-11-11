@@ -471,6 +471,9 @@ button.row:active { background: var(--surface-2); }
 .ib-item .btn-row { margin-top: 10px; }
 .is-status { min-height: 22px; margin: 10px 2px 0; font-size: 14.5px; color: var(--text-2); }
 .row.is-auto-row .seg { flex: 0 0 116px; min-width: 0; }
+details.adv { margin-top: 24px; padding: 12px 14px; border-radius: 16px; background: var(--surface-2); }
+details.adv summary { font-weight: 650; cursor: pointer; color: var(--text-2); }
+details.adv[open] summary { margin-bottom: 10px; }
 .steps code { font-size: 13px; padding: 1px 6px; border-radius: 6px; background: var(--surface-2); }
 
 /* =====================================================================
@@ -600,12 +603,14 @@ button.row:active { background: var(--surface-2); }
 /* =====================================================================
    1. Константы и утилиты
    ===================================================================== */
-const APP_VERSION = '1.1.0';
+const APP_VERSION = '1.2.0';
 const STORAGE_KEY = 'traty.data.v1';
 const RATES_KEY = 'traty.rates.v1';
 const THEME_KEY = 'traty.theme';
 const CHART_URL = 'https://cdn.jsdelivr.net/npm/chart.js@4.5.1/dist/chart.umd.min.js';
 const FRANKFURTER = 'https://api.frankfurter.dev/v2';
+/** Сервер «Входящие» по умолчанию (траты из Apple Pay и SMS). Свой сервер можно указать в настройках. */
+const DEFAULT_INBOX_URL = 'https://traty-inbox.traty-758cef38.workers.dev';
 const DAY_MS = 864e5;
 
 const MONTHS = ['Январь', 'Февраль', 'Март', 'Апрель', 'Май', 'Июнь', 'Июль', 'Август', 'Сентябрь', 'Октябрь', 'Ноябрь', 'Декабрь'];
@@ -2891,122 +2896,148 @@ function openInboxSheet() {
   render();
 }
 
-/** Настройка автоматического ввода: сервер, ключ, инструкции для «Команд». */
+/** Настройка автоматического ввода: подключение одной кнопкой, инструкции для «Команд», свой сервер. */
 function openInboxSetupSheet() {
   const st = S(), c = st.settings.inbox;
-  const f = { url: c.url || '', token: c.token || '', autoAdd: c.autoAdd !== false };
+  const connected = Inbox.configured();
+  const own = connected && c.url !== DEFAULT_INBOX_URL;
   const genToken = () => Array.from(crypto.getRandomValues(new Uint8Array(18)), (x) => x.toString(16).padStart(2, '0')).join('');
   const cleanUrl = (u) => {
     let v = String(u || '').trim().replace(/\s+/g, '');
     if (!v) return '';
     if (!/^https?:\/\//i.test(v)) v = 'https://' + v;
-    return v.replace(/[?#].*$/, '').replace(/\/+$/, '').replace(/\/(tx|ack)$/i, '');
+    return v.replace(/[?#].*$/, '').replace(/\/+$/, '').replace(/\/(tx|ack|register)$/i, '');
   };
+  const host = (u) => { try { return new URL(u).host; } catch (e) { return u; } };
   const s = Sheet.open({
     title: 'Траты из банка', left: 'Закрыть',
-    body: `<p class="sheet-text">Каждая оплата Apple Pay (и, по желанию, SMS от банка) автоматически отправляется на ваш личный сервер «Входящие», а приложение забирает новые траты при открытии. Настраивается один раз: бесплатный сервер на Cloudflare и автоматизация в «Командах».</p>
-      <div class="field"><div class="field-label">Адрес сервера</div><input class="input" id="is-url" type="url" inputmode="url" autocapitalize="none" autocomplete="off" spellcheck="false" placeholder="https://traty-inbox.имя.workers.dev" value="${esc(f.url)}"></div>
-      <div class="field"><div class="field-label">Секретный ключ (TOKEN)</div><input class="input" id="is-token" type="text" autocapitalize="none" autocomplete="off" spellcheck="false" placeholder="Нажмите «Создать ключ»" value="${esc(f.token)}">
-        <div class="btn-row"><button class="btn btn-secondary" data-gen>Создать ключ</button><button class="btn btn-secondary" data-copy-token>Копировать</button></div></div>
-      <div class="field"><div class="list"><div class="row is-auto-row"><span class="ri">⚡</span><span class="rl">Добавлять сразу<small>магазины, чья категория уже известна</small></span>
-        <div class="seg" id="is-auto"><button data-v="1" class="${f.autoAdd ? 'on' : ''}">Да</button><button data-v="0" class="${f.autoAdd ? '' : 'on'}">Нет</button></div></div></div></div>
-      <div class="btn-row"><button class="btn btn-secondary" data-check>Проверить связь</button><button class="btn btn-secondary" data-test>Тестовая трата</button></div>
+    body: `<p class="sheet-text">Каждая оплата Apple Pay (и, по желанию, SMS от банка) отправляется в ваш личный ящик «Входящие» на сервере, а приложение забирает новые траты при открытии.</p>
+      ${connected ? `<div class="list">
+          <div class="row"><span class="ri">✅</span><span class="rl">Подключено<small>${esc(host(c.url))}${own ? ' · свой сервер' : ''}</small></span></div>
+          <div class="row is-auto-row"><span class="ri">⚡</span><span class="rl">Добавлять сразу<small>магазины, чья категория уже известна</small></span>
+            <div class="seg" id="is-auto"><button data-v="1" class="${c.autoAdd !== false ? 'on' : ''}">Да</button><button data-v="0" class="${c.autoAdd !== false ? '' : 'on'}">Нет</button></div></div>
+        </div>
+        <div class="btn-row"><button class="btn btn-secondary" data-check>Проверить связь</button><button class="btn btn-secondary" data-test>Тестовая трата</button></div>`
+      : `<button class="btn btn-primary" data-connect>Подключить</button>
+        <p class="sheet-text" style="margin-top:10px;font-size:13.5px">Приложение получит личный ключ: ваши траты видны только по нему.</p>`}
       <div class="is-status" id="is-status"></div>
 
-      <div class="group-title">1. Сервер (Cloudflare, бесплатно)</div>
+      <div class="group-title">Команда для Apple Pay</div>
       <ol class="steps">
-        <li><span class="n">1</span><span>Зарегистрируйтесь на <b>dash.cloudflare.com</b>. Удобнее делать с компьютера.</span></li>
-        <li><span class="n">2</span><span><b>Storage &amp; Databases → KV → Create</b>, имя <b>traty-inbox</b>.</span></li>
-        <li><span class="n">3</span><span><b>Workers &amp; Pages → Create → Worker</b>, назовите <b>traty-inbox</b> и нажмите <b>Deploy</b>. Затем <b>Edit code</b>: замените весь код содержимым файла <b>inbox-worker/worker.js</b> из репозитория приложения и снова нажмите <b>Deploy</b>.</span></li>
-        <li><span class="n">4</span><span>В воркере: <b>Settings → Bindings → Add → KV namespace</b>. Имя переменной <b>INBOX</b>, хранилище — traty-inbox.</span></li>
-        <li><span class="n">5</span><span><b>Settings → Variables and Secrets → Add</b>: тип <b>Secret</b>, имя <b>TOKEN</b>, значение — ключ из поля выше.</span></li>
-        <li><span class="n">6</span><span>Скопируйте адрес воркера (…<b>.workers.dev</b>) в поле «Адрес сервера», нажмите «Проверить связь».</span></li>
-      </ol>
-
-      <div class="group-title">2. Команда для Apple Pay</div>
-      <ol class="steps">
-        <li><span class="n">1</span><span>Приложение <b>«Команды»</b> → вкладка <b>«Автоматизация»</b> → <b>«+»</b> → <b>«Транзакция»</b>.</span></li>
-        <li><span class="n">2</span><span>Выберите все карты, отметьте <b>«Запускать сразу»</b> → <b>«Далее»</b> → <b>«Новая пустая команда»</b>.</span></li>
-        <li><span class="n">3</span><span>Добавьте действие <b>«Получить содержимое URL»</b>. В адрес вставьте ссылку из кнопки ниже.</span></li>
-        <li><span class="n">4</span><span>Раскройте действие (стрелка): метод <b>POST</b>, текст запроса <b>JSON</b>. Добавьте текстовые поля:<br>
-          <code>amount</code> → переменная <b>«Входные данные команды»</b>, свойство <b>«Сумма»</b>;<br>
-          <code>merchant</code> → свойство <b>«Продавец»</b>;<br>
-          <code>card</code> → свойство <b>«Карта»</b> (необязательно);<br>
-          <code>source</code> → текст <b>wallet</b>.<br>
-          <small class="muted">Названия свойств в iOS могут немного отличаться.</small></span></li>
+        <li><span class="n">1</span><span>${connected ? 'Нажмите кнопку ниже — ссылка скопируется.' : 'Сначала нажмите «Подключить» выше, затем — «Скопировать ссылку для команды».'}</span></li>
+        <li><span class="n">2</span><span>Приложение <b>«Команды»</b> → <b>«Автоматизация»</b> → <b>«+»</b> → <b>«Транзакция»</b>. Выберите все карты, включите <b>«Запускать сразу»</b> → «Далее» → <b>«Новая пустая команда»</b>.</span></li>
+        <li><span class="n">3</span><span>Добавьте действие <b>«Получить содержимое URL»</b> (Get Contents of URL) и вставьте ссылку.</span></li>
+        <li><span class="n">4</span><span>Раскройте действие: метод <b>POST</b>, текст запроса <b>JSON</b>. Добавьте текстовые поля:<br>
+          <code>amount</code> → <b>«Входные данные команды»</b> (Shortcut Input), свойство <b>«Сумма»</b> (Amount);<br>
+          <code>merchant</code> → свойство <b>«Продавец»</b> (Merchant);<br>
+          <code>card</code> → свойство <b>«Карта»</b> (Card), необязательно;<br>
+          <code>source</code> → текст <b>wallet</b>.</span></li>
         <li><span class="n">5</span><span>Оплатите что-нибудь через Apple Pay и откройте «Траты» — покупка появится во «Входящих».</span></li>
       </ol>
-      <button class="btn btn-primary" data-copy-url>Скопировать ссылку для команды</button>
+      ${connected ? '<button class="btn btn-primary" data-copy-url>Скопировать ссылку для команды</button>' : ''}
 
-      <div class="group-title">3. SMS банка (по желанию)</div>
+      <div class="group-title">SMS банка (по желанию)</div>
       <ol class="steps">
         <li><span class="n">1</span><span>Включите SMS об оплатах картой в приложении банка (например, в Ziraat Mobil — уведомления по карте).</span></li>
-        <li><span class="n">2</span><span>«Автоматизация» → «+» → <b>«Сообщение»</b>. Отправитель — номер банка (или условие «Сообщение содержит» — слово из SMS о покупке, например <b>harcama</b>). Отметьте «Запускать сразу».</span></li>
-        <li><span class="n">3</span><span>То же действие «Получить содержимое URL» с той же ссылкой, POST, JSON: <code>text</code> → <b>«Входные данные команды»</b> (текст сообщения), <code>source</code> → <b>sms</b>.</span></li>
+        <li><span class="n">2</span><span>«Автоматизация» → «+» → <b>«Сообщение»</b>. Отправитель — номер банка (или «Сообщение содержит» — слово из SMS о покупке, например <b>harcama</b>). Включите «Запускать сразу».</span></li>
+        <li><span class="n">3</span><span>То же действие «Получить содержимое URL» с той же ссылкой, POST, JSON: <code>text</code> → <b>«Входные данные команды»</b>, <code>source</code> → <b>sms</b>.</span></li>
       </ol>
-      <div class="note">Сумму, валюту и магазин приложение найдёт в тексте SMS само. Одна и та же покупка из Apple Pay и SMS будет помечена как возможный дубль.</div>`,
-    foot: '<button class="btn btn-primary" data-save>Сохранить</button>',
+
+      <details class="adv"${own ? ' open' : ''}><summary>Свой сервер и ключ</summary>
+        <p class="sheet-text">Для тех, кто хочет держать сервер у себя. Код — <b>inbox-worker/worker.js</b> в репозитории приложения.</p>
+        <div class="field"><div class="field-label">Адрес сервера</div><input class="input" id="is-url" type="url" inputmode="url" autocapitalize="none" autocomplete="off" spellcheck="false" placeholder="https://traty-inbox.имя.workers.dev" value="${esc(c.url)}"></div>
+        <div class="field"><div class="field-label">Ключ</div><input class="input" id="is-token" type="text" autocapitalize="none" autocomplete="off" spellcheck="false" placeholder="Ключ (TOKEN)" value="${esc(c.token)}">
+          <div class="btn-row"><button class="btn btn-secondary" data-gen>Создать ключ</button><button class="btn btn-secondary" data-copy-token>Копировать</button></div></div>
+        <ol class="steps" style="margin-top:16px">
+          <li><span class="n">1</span><span><b>dash.cloudflare.com</b> → <b>Storage &amp; Databases → KV → Create</b>, имя <b>traty-inbox</b>.</span></li>
+          <li><span class="n">2</span><span><b>Workers &amp; Pages → Create → Worker</b> → <b>Deploy</b> → <b>Edit code</b>: вставьте код из <b>inbox-worker/worker.js</b> → <b>Deploy</b>.</span></li>
+          <li><span class="n">3</span><span><b>Settings → Bindings → Add → KV namespace</b>: имя <b>INBOX</b>. <b>Variables and Secrets → Add → Secret</b>: имя <b>TOKEN</b>, значение — ключ выше.</span></li>
+        </ol>
+        <button class="btn btn-secondary" data-save-own>Сохранить свой сервер</button>
+      </details>
+      ${connected ? '<button class="btn btn-danger" data-disconnect style="margin-top:22px">Отключить</button>' : ''}`,
   });
   const q = (sel) => $(sel, s.sheet);
-  const read = () => ({ url: cleanUrl(q('#is-url').value), token: q('#is-token').value.trim(), autoAdd: f.autoAdd });
   const status = (html) => { q('#is-status').innerHTML = html; };
-  const apply = () => {
-    const v = read();
-    q('#is-url').value = v.url;
-    S().settings.inbox = v;
+  const reopen = () => { Sheet.close(s); setTimeout(openInboxSetupSheet, 380); };
+  const save = (v) => { S().settings.inbox = { ...S().settings.inbox, ...v }; Store.commit(); };
+
+  const connectBtn = q('[data-connect]');
+  if (connectBtn) connectBtn.addEventListener('click', async () => {
+    connectBtn.disabled = true;
+    status('<span class="spinner"></span> Подключаю…');
+    try {
+      const j = await Inbox.req('/register', { method: 'POST', cfg: { url: DEFAULT_INBOX_URL, token: '' } });
+      if (!j.key) throw new Error('no_key');
+      save({ url: DEFAULT_INBOX_URL, token: j.key });
+      toast('Подключено — осталось создать команду');
+      Inbox.sync({ force: true });
+      reopen();
+    } catch (e) {
+      connectBtn.disabled = false;
+      const msg = e && e.status === 429 ? 'Сегодня было слишком много подключений — попробуйте завтра'
+        : e && e.message === 'registration_closed' ? 'Новые подключения на сервере закрыты'
+        : inboxErrorText(e);
+      status(`❌ ${esc(msg)}`);
+    }
+  });
+  const auto = q('#is-auto');
+  if (auto) auto.addEventListener('click', (e) => {
+    const x = e.target.closest('[data-v]');
+    if (!x) return;
+    $$('#is-auto button', s.sheet).forEach((b) => b.classList.toggle('on', b === x));
+    S().settings.inbox.autoAdd = x.dataset.v === '1';
     Store.save();
-    return v;
-  };
-  const needBoth = (v) => {
-    if (!v.url) { toast('Укажите адрес сервера'); q('#is-url').focus(); return false; }
-    if (!v.token) { toast('Создайте или вставьте ключ'); return false; }
-    return true;
-  };
+  });
+  const check = q('[data-check]');
+  if (check) check.addEventListener('click', async () => {
+    status('<span class="spinner"></span> Проверяю…');
+    try {
+      const j = await Inbox.req('/');
+      status(`✅ Сервер на связи${j.pending != null ? ` · ждут на сервере: ${j.pending}` : ''}`);
+    } catch (e) { status(`❌ ${esc(inboxErrorText(e))}`); }
+  });
+  const test = q('[data-test]');
+  if (test) test.addEventListener('click', async () => {
+    status('<span class="spinner"></span> Отправляю тестовую трату…');
+    try {
+      await Inbox.req('/tx', { method: 'POST', body: { amount: '₺1,00', merchant: 'Тестовая трата', source: 'test' } });
+      await Inbox.sync({ force: true, loud: true });
+      status('✅ Тестовая трата отправлена — через несколько секунд она появится во «Входящих» (можно удалить).');
+    } catch (e) { status(`❌ ${esc(inboxErrorText(e))}`); }
+  });
+  const copyUrl = q('[data-copy-url]');
+  if (copyUrl) copyUrl.addEventListener('click', () => {
+    const v = S().settings.inbox;
+    copyText(`${v.url}/tx?key=${encodeURIComponent(v.token)}`, 'Ссылка для команды скопирована');
+  });
   q('[data-gen]').addEventListener('click', async () => {
     if (q('#is-token').value.trim()) {
-      const ok = await confirmSheet({ title: 'Создать новый ключ?', text: 'Старый ключ перестанет подходить: его нужно будет заменить в Cloudflare (TOKEN) и в ссылке команды.', ok: 'Создать' });
+      const ok = await confirmSheet({ title: 'Создать новый ключ?', text: 'Старый ключ перестанет подходить: его нужно будет заменить на сервере (TOKEN) и в ссылке команды.', ok: 'Создать' });
       if (!ok) return;
     }
     q('#is-token').value = genToken();
   });
-  q('[data-copy-token]').addEventListener('click', () => { const v = read(); if (v.token) copyText(v.token, 'Ключ скопирован'); else toast('Сначала создайте ключ'); });
-  q('[data-copy-url]').addEventListener('click', () => {
-    const v = read();
-    if (!needBoth(v)) return;
-    copyText(`${v.url}/tx?key=${encodeURIComponent(v.token)}`, 'Ссылка для команды скопирована');
-  });
-  q('#is-auto').addEventListener('click', (e) => {
-    const x = e.target.closest('[data-v]');
-    if (!x) return;
-    f.autoAdd = x.dataset.v === '1';
-    $$('#is-auto button', s.sheet).forEach((b) => b.classList.toggle('on', b === x));
-  });
-  q('[data-check]').addEventListener('click', async () => {
-    const v = apply();
-    if (!needBoth(v)) return;
+  q('[data-copy-token]').addEventListener('click', () => { const t = q('#is-token').value.trim(); if (t) copyText(t, 'Ключ скопирован'); else toast('Сначала создайте ключ'); });
+  q('[data-save-own]').addEventListener('click', async () => {
+    const v = { url: cleanUrl(q('#is-url').value), token: q('#is-token').value.trim() };
+    if (!v.url || !v.token) { toast('Укажите адрес и ключ'); return; }
     status('<span class="spinner"></span> Проверяю…');
     try {
-      const j = await Inbox.req('/', { cfg: v });
-      status(`✅ Сервер на связи${j.pending != null ? ` · ждут на сервере: ${j.pending}` : ''}`);
+      await Inbox.req('/', { cfg: v });
+      save(v);
+      toast('Свой сервер подключён');
+      Inbox.sync({ force: true });
+      reopen();
     } catch (e) { status(`❌ ${esc(inboxErrorText(e))}`); }
   });
-  q('[data-test]').addEventListener('click', async () => {
-    const v = apply();
-    if (!needBoth(v)) return;
-    status('<span class="spinner"></span> Отправляю тестовую трату…');
-    try {
-      await Inbox.req('/tx', { method: 'POST', body: { amount: '₺1,00', merchant: 'Тестовая трата', source: 'test' }, cfg: v });
-      await Inbox.sync({ force: true, loud: true });
-      status('✅ Тестовая трата пришла — она во «Входящих», её можно удалить.');
-    } catch (e) { status(`❌ ${esc(inboxErrorText(e))}`); }
-  });
-  q('[data-save]').addEventListener('click', () => {
-    const v = apply();
-    if (v.url && !v.token) { toast('Создайте или вставьте ключ'); return; }
-    Sheet.close(s);
-    Store.commit();
-    toast(v.url ? 'Сохранено' : 'Автоматический ввод отключён');
-    Inbox.sync({ force: true, loud: true });
+  const disc = q('[data-disconnect]');
+  if (disc) disc.addEventListener('click', async () => {
+    const ok = await confirmSheet({ title: 'Отключить?', text: 'Новые траты из Apple Pay и SMS перестанут приходить в приложение. Уже добавленные покупки останутся. Команду в «Командах» можно будет удалить.', ok: 'Отключить', danger: true });
+    if (!ok) return;
+    save({ url: '', token: '' });
+    toast('Автоматический ввод отключён');
+    reopen();
   });
 }
 
