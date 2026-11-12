@@ -603,7 +603,7 @@ details.adv[open] summary { margin-bottom: 10px; }
 /* =====================================================================
    1. Константы и утилиты
    ===================================================================== */
-const APP_VERSION = '1.3.0';
+const APP_VERSION = '1.3.1';
 const STORAGE_KEY = 'traty.data.v1';
 const RATES_KEY = 'traty.rates.v1';
 const THEME_KEY = 'traty.theme';
@@ -3266,10 +3266,17 @@ const Actions = {
   'merchant-rules': () => openMerchantRulesSheet(),
   'install-android': async () => { if (!deferredInstall) return; deferredInstall.prompt(); await deferredInstall.userChoice.catch(() => null); deferredInstall = null; renderSettings(); },
   wipe: async () => {
-    const ok = await confirmSheet({ title: 'Удалить все данные?', text: 'Покупки, категории, шаблоны и настройки будут удалены с этого устройства. Сначала сделайте экспорт JSON, если данные нужны.', ok: 'Удалить всё', danger: true });
+    const keepInbox = Inbox.configured();
+    const ok = await confirmSheet({ title: 'Удалить все данные?', text: `Покупки, категории, шаблоны и настройки будут удалены с этого устройства. Сначала сделайте экспорт JSON, если данные нужны.${keepInbox ? ' Подключение к серверу «Входящие» сохранится — команды на iPhone продолжат работать.' : ''}`, ok: 'Удалить всё', danger: true });
     if (!ok) return;
+    const old = S();
     const fresh = defaultState();
     fresh.meta.installHintShown = true;
+    // ключ сервера не удаляем: иначе команды на iPhone будут слать траты в ящик, который приложение больше не читает
+    if (keepInbox) {
+      fresh.settings.inbox = { ...old.settings.inbox };
+      fresh.meta.inboxSeen = old.meta.inboxSeen;
+    }
     Store.state = fresh;
     clearFilters();
     Store.commit();
