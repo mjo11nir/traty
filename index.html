@@ -603,7 +603,7 @@ details.adv[open] summary { margin-bottom: 10px; }
 /* =====================================================================
    1. Константы и утилиты
    ===================================================================== */
-const APP_VERSION = '1.3.1';
+const APP_VERSION = '1.4.0';
 const STORAGE_KEY = 'traty.data.v1';
 const RATES_KEY = 'traty.rates.v1';
 const THEME_KEY = 'traty.theme';
@@ -611,6 +611,8 @@ const CHART_URL = 'https://cdn.jsdelivr.net/npm/chart.js@4.5.1/dist/chart.umd.mi
 const FRANKFURTER = 'https://api.frankfurter.dev/v2';
 /** Сервер «Входящие» по умолчанию (траты из Apple Pay и SMS). Свой сервер можно указать в настройках. */
 const DEFAULT_INBOX_URL = 'https://traty-inbox.traty-758cef38.workers.dev';
+/** Готовая команда «Трата» (быстрая запись) в iCloud: при установке спрашивает личную ссылку. */
+const SHORTCUT_QUICK_URL = 'https://www.icloud.com/shortcuts/e728d261ae404e8a8dad80cf415c75ec';
 const DAY_MS = 864e5;
 
 const MONTHS = ['Январь', 'Февраль', 'Март', 'Апрель', 'Май', 'Июнь', 'Июль', 'Август', 'Сентябрь', 'Октябрь', 'Ноябрь', 'Декабрь'];
@@ -2789,16 +2791,20 @@ function inboxErrorText(e) {
   return navigator.onLine === false ? 'Нет интернета' : 'Сервер недоступен — проверьте адрес';
 }
 
-/** Копирование в буфер обмена (с запасным способом для старых браузеров). */
-async function copyText(text, okMsg = 'Скопировано') {
-  try { await navigator.clipboard.writeText(text); toast(okMsg); return; } catch (e) { /* запасной способ */ }
+/** Копирование через скрытое поле (работает синхронно в обработчике нажатия). */
+function copyFallback(text) {
   const ta = document.createElement('textarea');
   ta.value = text; ta.setAttribute('readonly', ''); ta.style.cssText = 'position:fixed;top:0;left:0;opacity:0';
   document.body.append(ta); ta.select(); ta.setSelectionRange(0, text.length);
   let ok = false;
   try { ok = document.execCommand('copy'); } catch (e) { ok = false; }
   ta.remove();
-  toast(ok ? okMsg : 'Не удалось скопировать');
+  return ok;
+}
+/** Копирование в буфер обмена (с запасным способом для старых браузеров). */
+async function copyText(text, okMsg = 'Скопировано') {
+  try { await navigator.clipboard.writeText(text); toast(okMsg); return; } catch (e) { /* запасной способ */ }
+  toast(copyFallback(text) ? okMsg : 'Не удалось скопировать');
 }
 
 /** Лист «Входящие»: подтверждение трат из банка. */
@@ -2945,6 +2951,28 @@ function openInboxSetupSheet() {
         <p class="sheet-text" style="margin-top:10px;font-size:13.5px">Приложение получит личный ключ: ваши траты видны только по нему.</p>`}
       <div class="is-status" id="is-status"></div>
 
+      <div class="group-title">Быстрая запись — двойной тап по крышке</div>
+      ${connected ? `<ol class="steps">
+        <li><span class="n">1</span><span>Нажмите кнопку ниже: ваша личная ссылка скопируется, и откроется готовая команда <b>«Трата»</b>.</span></li>
+        <li><span class="n">2</span><span>В «Командах» нажмите <b>«Добавить команду»</b> (Add Shortcut). На вопрос «Вставьте ссылку из приложения „Траты“» — вставьте ссылку из буфера.</span></li>
+        <li><span class="n">3</span><span>Настройки iPhone → <b>Универсальный доступ → Касание → Коснуться сзади → Двойное касание</b> (Accessibility → Touch → Back Tap → Double Tap) → команда <b>Трата</b>.</span></li>
+      </ol>
+      <button class="btn btn-primary" data-install-quick>Установить команду «Трата»</button>`
+      : '<p class="sheet-text">Сначала нажмите «Подключить» выше — тогда здесь появится кнопка установки готовой команды.</p>'}
+      <p class="sheet-text" style="margin-top:12px">Двойной тап по крышке → сумма → категория → комментарий. Трата сразу попадает в историю (её можно изменить), а без интернета дождётся связи в очереди на iPhone. В готовой команде — стандартные категории: если вы переименовали свои, такая трата попросит подтверждения во «Входящих».</p>
+      <details class="adv"><summary>Собрать команду вручную</summary>
+        <ol class="steps">
+        <li><span class="n">1</span><span>«Команды» → вкладка <b>«Команды»</b> → <b>«+»</b>, назовите <b>Трата</b>.</span></li>
+        <li><span class="n">2</span><span><b>«Запросить ввод»</b> (Ask for Input): тип <b>Число</b>, вопрос «Сколько?».</span></li>
+        <li><span class="n">3</span><span><b>«Текст»</b> — вставьте список категорий <button class="chip sm" data-copy="cats">Скопировать категории</button> → <b>«Разделить текст»</b> (Split Text) по новым строкам → <b>«Выбрать из списка»</b> (Choose from List).</span></li>
+        <li><span class="n">4</span><span><b>«Запросить ввод»</b>: тип <b>Текст</b>, вопрос «Комментарий» (можно оставлять пустым).</span></li>
+        <li><span class="n">5</span><span><b>«Текст»</b> — вставьте шаблон <button class="chip sm" data-copy="quick">Скопировать шаблон</button> и замените слова переменными: ДАТА → <b>«Текущая дата»</b> (нажмите на неё → формат <b>ISO 8601</b>), СУММА → ответ «Сколько?», КАТЕГОРИЯ → <b>«Выбранный объект»</b>, КОММЕНТАРИЙ → ответ «Комментарий».</span></li>
+        <li><span class="n">6</span><span>Блок «Отправить» (4 действия выше). По желанию — <b>«Показать уведомление»</b> «Записано».</span></li>
+        <li><span class="n">7</span><span>Настройки iPhone → <b>Универсальный доступ → Касание → Коснуться сзади → Двойное касание</b> → команда <b>Трата</b>.</span></li>
+      </ol>
+      </details>
+
+
       <div class="note">Команды работают и без интернета: каждая трата сначала записывается в файл-очередь на iPhone, а потом отправляется весь файл. Нет связи — команда покажет ошибку, но трата останется в файле и уйдёт со следующей командой. Время покупки сохранится.</div>
       ${connected ? '' : '<p class="sheet-text">Чтобы получить ссылку для команд, сначала нажмите «Подключить» выше.</p>'}
 
@@ -2956,18 +2984,6 @@ function openInboxSetupSheet() {
         <li><span class="n">4</span><span><b>«Удалить файлы»</b> (Delete Files): файл из шага 2, «Подтверждать удаление» — выкл.</span></li>
       </ol>
       ${connected ? '<button class="btn btn-primary" data-copy-url>Скопировать ссылку для команд</button>' : ''}
-
-      <div class="group-title">Быстрая запись — двойной тап по крышке</div>
-      <ol class="steps">
-        <li><span class="n">1</span><span>«Команды» → вкладка <b>«Команды»</b> → <b>«+»</b>, назовите <b>Трата</b>.</span></li>
-        <li><span class="n">2</span><span><b>«Запросить ввод»</b> (Ask for Input): тип <b>Число</b>, вопрос «Сколько?».</span></li>
-        <li><span class="n">3</span><span><b>«Текст»</b> — вставьте список категорий <button class="chip sm" data-copy="cats">Скопировать категории</button> → <b>«Разделить текст»</b> (Split Text) по новым строкам → <b>«Выбрать из списка»</b> (Choose from List).</span></li>
-        <li><span class="n">4</span><span><b>«Запросить ввод»</b>: тип <b>Текст</b>, вопрос «Комментарий» (можно оставлять пустым).</span></li>
-        <li><span class="n">5</span><span><b>«Текст»</b> — вставьте шаблон <button class="chip sm" data-copy="quick">Скопировать шаблон</button> и замените слова переменными: ДАТА → <b>«Текущая дата»</b> (нажмите на неё → формат <b>ISO 8601</b>), СУММА → ответ «Сколько?», КАТЕГОРИЯ → <b>«Выбранный объект»</b>, КОММЕНТАРИЙ → ответ «Комментарий».</span></li>
-        <li><span class="n">6</span><span>Блок «Отправить» (4 действия выше). По желанию — <b>«Показать уведомление»</b> «Записано».</span></li>
-        <li><span class="n">7</span><span>Настройки iPhone → <b>Универсальный доступ → Касание → Коснуться сзади → Двойное касание</b> → команда <b>Трата</b>.</span></li>
-      </ol>
-      <p class="sheet-text">Такая трата сразу попадает в историю с выбранной категорией — её можно изменить, как обычную покупку.</p>
 
       <div class="group-title">Apple Pay</div>
       <ol class="steps">
@@ -3047,6 +3063,16 @@ function openInboxSetupSheet() {
       await Inbox.sync({ force: true, loud: true });
       status('✅ Тестовая трата отправлена — через несколько секунд она появится во «Входящих» (можно удалить).');
     } catch (e) { status(`❌ ${esc(inboxErrorText(e))}`); }
+  });
+  const installQuick = q('[data-install-quick]');
+  if (installQuick) installQuick.addEventListener('click', () => {
+    const v = S().settings.inbox;
+    const link = `${v.url}/batch?key=${encodeURIComponent(v.token)}`;
+    // копирование и открытие — синхронно в обработчике нажатия, иначе iOS их заблокирует
+    try { navigator.clipboard.writeText(link).catch(() => {}); } catch (e) { /* ниже — запасной способ */ }
+    copyFallback(link);
+    window.open(SHORTCUT_QUICK_URL, '_blank') || (location.href = SHORTCUT_QUICK_URL);
+    toast('Ссылка скопирована — вставьте её при установке команды', { duration: 6000 });
   });
   const copyUrl = q('[data-copy-url]');
   if (copyUrl) copyUrl.addEventListener('click', () => {
