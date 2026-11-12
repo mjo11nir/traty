@@ -7,7 +7,7 @@
    После изменения файлов на хостинге увеличьте VERSION — пользователи
    увидят предложение «Доступна новая версия».
    ===================================================================== */
-const VERSION = 'traty-v1.7.0';
+const VERSION = 'traty-v1.1.0';
 const SHELL = [
   './',
   './index.html',
@@ -59,34 +59,6 @@ self.addEventListener('fetch', (event) => {
   if (url.origin === self.location.origin || CDN.includes(url.href)) {
     event.respondWith(staleWhileRevalidate(event));
   }
-});
-
-/* --- Уведомления (Web Push от сервера «Входящие») --- */
-self.addEventListener('push', (event) => {
-  let msg = {};
-  try { msg = event.data ? event.data.json() : {}; } catch (e) { msg = { body: event.data ? event.data.text() : '' }; }
-  event.waitUntil(self.registration.showNotification(msg.title || 'Траты', {
-    body: msg.body || '',
-    tag: msg.tag || 'traty',
-    icon: './icons/icon-192.png',
-    badge: './icons/icon-192.png',
-    data: { url: msg.url || './' },
-  }));
-});
-// Нажатие на уведомление: открыть приложение (или переключиться на уже открытое) нужным экраном
-self.addEventListener('notificationclick', (event) => {
-  event.notification.close();
-  const url = new URL((event.notification.data && event.notification.data.url) || './', self.registration.scope).href;
-  event.waitUntil((async () => {
-    const all = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
-    const client = all.find((c) => c.url.startsWith(self.registration.scope));
-    if (client) {
-      await client.focus();
-      client.postMessage({ type: 'open', url });
-      return;
-    }
-    await self.clients.openWindow(url);
-  })());
 });
 
 /** Отдаёт из кэша сразу, параллельно обновляя кэш из сети. */
