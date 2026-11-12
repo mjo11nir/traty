@@ -124,7 +124,7 @@ svg.i { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-widt
   padding: calc(var(--sat) + 10px) calc(16px + var(--sar)) calc(var(--tabbar-h) + var(--sab) + 36px) calc(16px + var(--sal));
 }
 .view { display: none; }
-.view.active { display: block; animation: viewIn .28s var(--ease); }
+.view.active { display: block; }
 .topbar { display: flex; align-items: flex-end; justify-content: space-between; gap: 12px; padding: 6px 2px 14px; }
 .topbar h1 { font-size: 32px; line-height: 1.1; font-weight: 800; letter-spacing: -.035em; margin: 0; }
 .eyebrow { font-size: 13px; font-weight: 600; color: var(--text-2); margin-bottom: 2px; }
@@ -610,6 +610,79 @@ details.adv[open] summary { margin-bottom: 10px; }
 .nt-opt .seg button { font-size: 13.5px; }
 @keyframes ring { 0%, 100% { transform: rotate(0); } 10%, 30% { transform: rotate(14deg); } 20%, 40% { transform: rotate(-12deg); } 50% { transform: rotate(0); } }
 
+
+/* =====================================================================
+   Анимации 1.7: переходы, «бегунки», галочка «+», схлопывание, детали
+   ===================================================================== */
+/* нижняя панель: значок подпрыгивает, под активной вкладкой — точка */
+.tab { position: relative; }
+.tab.active svg.i { animation: tabPop .42s var(--ease); }
+.tab::after { content: ""; position: absolute; bottom: 0; left: 50%; width: 4px; height: 4px; margin-left: -2px; border-radius: 2px; background: var(--accent); transform: scale(0); transition: transform .3s var(--ease); }
+.tab.active::after { transform: scale(1); }
+
+/* «+»: поворот, пока открыта форма; зелёная галочка после добавления */
+.fab { position: relative; overflow: hidden; transition: transform .2s var(--ease), background .3s, box-shadow .3s; }
+.fab svg.i { transition: transform .35s var(--ease), opacity .2s; }
+.sheet-open .fab .fab-plus { transform: rotate(45deg); }
+.fab .fab-check { position: absolute; inset: 0; margin: auto; opacity: 0; stroke-width: 3; }
+.fab .fab-check path { stroke-dasharray: 24; stroke-dashoffset: 24; }
+.fab.done { background: linear-gradient(140deg, #3DDC97, var(--ok)); box-shadow: 0 10px 24px rgba(18, 184, 134, .45), 0 0 0 5px var(--bg); animation: fabPulse .5s var(--ease); }
+.fab.done .fab-plus { opacity: 0; transform: rotate(90deg) scale(.4); }
+.fab.done .fab-check { opacity: 1; }
+.fab.done .fab-check path { animation: draw .4s ease .08s forwards; }
+
+/* скользящий бегунок переключателей */
+.seg.has-thumb { position: relative; }
+.seg.has-thumb > button { position: relative; z-index: 1; }
+.seg.has-thumb > button.on { background: transparent; box-shadow: none; }
+.seg-thumb { position: absolute; left: 0; top: 0; border-radius: 10px; background: var(--seg-on); box-shadow: 0 1px 3px rgba(0, 0, 0, .1); transition: transform .32s var(--ease), width .32s var(--ease); pointer-events: none; }
+
+/* тосты: пружинка и полоска оставшегося времени у «Отменить» */
+.toast { position: relative; overflow: hidden; transition: opacity .25s, transform .45s cubic-bezier(.2, 1.35, .4, 1); }
+.toast.timed::after { content: ""; position: absolute; left: 16px; right: 16px; bottom: 5px; height: 2px; border-radius: 1px; background: rgba(255, 255, 255, .3); transform-origin: left; animation: drain var(--dur, 5s) linear forwards; }
+
+/* новая запись: въезжает и подсвечивается */
+.tx.flash { animation: txNew .5s var(--ease), flash 1.4s var(--ease); }
+
+/* главная карточка: круги медленно плавают, нажатие — лёгкое «вдавливание» */
+.hero { transition: transform .2s var(--ease); }
+.hero:active { transform: scale(.985); }
+.hero::before { animation: driftA 14s ease-in-out infinite alternate; }
+.hero::after { animation: driftB 11s ease-in-out infinite alternate; }
+
+/* выбор категории: значок подпрыгивает */
+.cat-tile.on .em { animation: pop .4s var(--ease); }
+.chip.on .x { display: inline-block; animation: pop .3s var(--ease); }
+
+/* листы стопкой: нижний слегка отъезжает назад */
+.sheet.show.behind { transform: translateY(-8px) scale(.95); transform-origin: 50% 0; }
+
+/* подсказка в строке ввода фразой: примеры сменяют друг друга */
+.ph-field { position: relative; flex: 1; min-width: 0; display: flex; }
+.ph-hint { position: absolute; inset: 0; display: flex; align-items: center; gap: 5px; color: var(--text-3); pointer-events: none; white-space: nowrap; overflow: hidden; transition: opacity .15s; }
+.ph-hint b { font-weight: 500; color: var(--text-2); display: inline-block; }
+.phrase input:not(:placeholder-shown) ~ .ph-hint { opacity: 0; }
+.phrase:focus-within .ph-ico { animation: pop .45s var(--ease); }
+
+/* нижняя панель выезжает при запуске */
+.tabbar { animation: barUp .55s var(--ease) both; }
+
+/* пустые экраны: значок «дышит» */
+.empty .em { display: inline-block; animation: floaty 3.2s ease-in-out infinite; }
+
+/* смена темы — плавное перетекание (View Transitions) */
+::view-transition-old(root), ::view-transition-new(root) { animation-duration: .35s; }
+
+@keyframes barUp { from { transform: translateY(100%); } to { transform: none; } }
+@keyframes tabPop { 0% { transform: scale(1); } 40% { transform: scale(1.18) translateY(-2px); } 100% { transform: scale(1); } }
+@keyframes fabPulse { 0% { transform: scale(1); } 35% { transform: scale(1.12); } 100% { transform: scale(1); } }
+@keyframes draw { to { stroke-dashoffset: 0; } }
+@keyframes drain { from { transform: scaleX(1); } to { transform: scaleX(0); } }
+@keyframes txNew { from { opacity: 0; transform: translateY(-10px) scale(.98); } to { opacity: 1; transform: none; } }
+@keyframes driftA { from { transform: translate(0, 0); } to { transform: translate(-26px, -18px); } }
+@keyframes driftB { from { transform: translate(0, 0); } to { transform: translate(-30px, 14px); } }
+@keyframes pop { 0% { transform: scale(1); } 40% { transform: scale(1.2); } 100% { transform: scale(1); } }
+
 /* =====================================================================
    9. Анимации и адаптив
    ===================================================================== */
@@ -623,7 +696,7 @@ details.adv[open] summary { margin-bottom: 10px; }
 @keyframes scan { 0% { top: 4%; } 50% { top: 92%; } 100% { top: 4%; } }
 @keyframes shake { 10%, 90% { transform: translateX(-1px); } 20%, 80% { transform: translateX(2px); } 30%, 50%, 70% { transform: translateX(-5px); } 40%, 60% { transform: translateX(5px); } }
 @media (prefers-reduced-motion: reduce) {
-  *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; }
+  *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
 }
 @media (max-width: 400px) {
   .theme-row .rl { flex: none; }
@@ -655,7 +728,8 @@ details.adv[open] summary { margin-bottom: 10px; }
     <div id="home-banners"></div>
     <div class="phrase" id="phrase">
       <span class="ph-ico" aria-hidden="true">✨</span>
-      <input id="phrase-in" type="text" placeholder="Напишите: кофе 120 или зарплата 45к" autocomplete="off" autocapitalize="sentences" enterkeyhint="done" aria-label="Добавить фразой">
+      <label class="ph-field"><input id="phrase-in" type="text" placeholder=" " autocomplete="off" autocapitalize="sentences" enterkeyhint="done" aria-label="Добавить фразой: например, кофе 120">
+        <span class="ph-hint" aria-hidden="true">Напишите: <b id="ph-ex">кофе 120</b></span></label>
       <button class="ph-go" id="phrase-go" type="button" aria-label="Добавить" hidden><svg class="i" viewBox="0 0 24 24"><path d="M12 19V5M6 11l6-6 6 6"/></svg></button>
     </div>
     <div class="ph-preview" id="phrase-prev"></div>
@@ -726,7 +800,7 @@ details.adv[open] summary { margin-bottom: 10px; }
   <div class="tabbar-inner">
     <button class="tab active" data-action="go" data-tab="home"><svg class="i" viewBox="0 0 24 24"><path d="M3.5 10.2 12 3.5l8.5 6.7V19a1.5 1.5 0 0 1-1.5 1.5h-4.2v-6h-5.6v6H5A1.5 1.5 0 0 1 3.5 19z"/></svg>Обзор</button>
     <button class="tab" data-action="go" data-tab="analytics"><svg class="i" viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-9-9v9z"/><path d="M15.5 3.7A9 9 0 0 1 20.3 8.5H15.5z"/></svg>Аналитика</button>
-    <button class="fab" data-action="add" aria-label="Добавить покупку"><svg class="i" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg></button>
+    <button class="fab" id="fab" data-action="add" aria-label="Добавить покупку"><svg class="i fab-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg><svg class="i fab-check" viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg></button>
     <button class="tab" data-action="go" data-tab="budgets"><svg class="i" viewBox="0 0 24 24"><path d="M4 17.5a8 8 0 1 1 16 0"/><path d="m12 17.5 4-5"/><circle cx="12" cy="17.5" r="1"/></svg>Планы</button>
     <button class="tab" data-action="go" data-tab="settings"><svg class="i" viewBox="0 0 24 24"><path d="M4 6h9M17 6h3M4 12h3M11 12h9M4 18h11M19 18h1"/><circle cx="15" cy="6" r="2"/><circle cx="9" cy="12" r="2"/><circle cx="17" cy="18" r="2"/></svg>Настройки</button>
   </div>
@@ -757,7 +831,7 @@ details.adv[open] summary { margin-bottom: 10px; }
 /* =====================================================================
    1. Константы и утилиты
    ===================================================================== */
-const APP_VERSION = '1.6.0';
+const APP_VERSION = '1.7.0';
 const STORAGE_KEY = 'traty.data.v1';
 const RATES_KEY = 'traty.rates.v1';
 const THEME_KEY = 'traty.theme';
@@ -1307,6 +1381,7 @@ const Sheet = {
       <div class="sheet-body">${body}</div>${foot ? `<div class="sheet-foot">${foot}</div>` : ''}`;
     document.body.append(overlay, sheet);
     const entry = { overlay, sheet, body: sheet.querySelector('.sheet-body'), foot: sheet.querySelector('.sheet-foot'), onClose, refresh, closed: false };
+    this.stack.forEach((x) => x.sheet.classList.add('behind'));
     this.stack.push(entry);
     overlay.addEventListener('click', () => this.close(entry));
     sheet.querySelector('[data-sheet-close]').addEventListener('click', () => this.close(entry));
@@ -1314,6 +1389,7 @@ const Sheet = {
     void sheet.offsetHeight; // принудительный reflow, чтобы сработала анимация появления
     overlay.classList.add('show');
     sheet.classList.add('show');
+    staggerIn(entry.body, ':scope > *', { step: 35, start: 90, max: 7 });
     document.documentElement.classList.add('sheet-open');
     return entry;
   },
@@ -1322,6 +1398,7 @@ const Sheet = {
     entry.closed = true;
     if (entry.sheet.contains(document.activeElement)) document.activeElement.blur();
     this.stack = this.stack.filter((x) => x !== entry);
+    if (this.stack.length) this.stack[this.stack.length - 1].sheet.classList.remove('behind');
     entry.overlay.classList.remove('show');
     entry.sheet.classList.remove('show');
     setTimeout(() => { entry.overlay.remove(); entry.sheet.remove(); }, 360);
@@ -1363,7 +1440,9 @@ function toast(msg, { action, onAction, duration } = {}) {
   void t.offsetHeight;
   t.classList.add('show');
   const hide = () => { t.classList.remove('show'); setTimeout(() => t.remove(), 300); };
-  const timer = setTimeout(hide, duration || (action ? 5500 : 2800));
+  const ms = duration || (action ? 5500 : 2800);
+  if (action) { t.classList.add('timed'); t.style.setProperty('--dur', ms + 'ms'); }
+  const timer = setTimeout(hide, ms);
   if (action) t.querySelector('button').addEventListener('click', () => { clearTimeout(timer); hide(); onAction && onAction(); });
 }
 
@@ -1520,6 +1599,7 @@ function shiftPeriod(dir) {
   else if (Period.type === 'year') { const y = +Period.anchor.slice(0, 4) + dir; Period.anchor = `${y}-01-01`; }
   else Period.anchor = addMonths(Period.anchor, dir);
   App.render('analytics');
+  slideIn($('#an-content'), dir);
 }
 /**
  * Сравнение с прошлым периодом. Если период ещё идёт — сравниваем с тем же числом дней
@@ -1558,8 +1638,13 @@ const App = {
   go(tab) {
     if (!this.tabs.includes(tab)) return;
     const changed = tab !== this.tab;
+    const dir = this.tabs.indexOf(tab) - this.tabs.indexOf(this.tab);
     this.tab = tab;
-    $$('.view').forEach((v) => v.classList.toggle('active', v.id === 'view-' + tab));
+    $$('.view').forEach((v) => {
+      const on = v.id === 'view-' + tab;
+      v.classList.toggle('active', on);
+      if (on && changed) slideIn(v, dir);
+    });
     $$('.tab').forEach((t) => t.classList.toggle('active', t.dataset.tab === tab));
     if (changed) window.scrollTo(0, 0);
     if (this.dirty.has(tab) || changed) this.render(tab);
@@ -1645,13 +1730,14 @@ function renderHero() {
   }
   const pctHtml = pct == null ? '' : `<span class="hero-pill">${icon(pct > 0 ? 'arrowUp' : 'arrowDown', 13)}${fmtPct(Math.abs(pct))} к ${rangeLabel(pf, pe)}</span>`;
   const income = sumBase(inRange(st.incomes, from, to)), left = income - total;
-  $('#home-hero').innerHTML = `<div class="hero" data-action="go" data-tab="analytics" role="button" aria-label="Открыть аналитику">
+  const heroBox = $('#home-hero');
+  if (!$('.hero-in', heroBox)) heroBox.innerHTML = '<div class="hero" data-action="go" data-tab="analytics" role="button" aria-label="Открыть аналитику"><div class="hero-in"></div></div>';
+  $('.hero-in', heroBox).innerHTML = `
     <div class="hero-label">Потрачено в ${MONTHS_PREP[m]}</div>
     <div class="hero-amount" id="hero-amount">${fmtMoney(total, b, { short: true })}</div>
     <div class="hero-row">${monthList.length ? `<span>≈ ${fmtMoney(toDate / elapsed, b, { short: true })} в день</span>${pctHtml}` : '<span>Пока нет трат в этом месяце</span>'}</div>
     ${income > 0 ? `<div class="hero-inc"><span>Доходы <b>+${fmtMoney(income, b, { short: true })}</b></span><span>${left >= 0 ? 'Остаток' : 'Перерасход'} <b>${fmtMoney(Math.abs(left), b, { short: true })}</b></span></div>` : ''}
-    ${budgetHtml}
-  </div>`;
+    ${budgetHtml}`;
   // число «докручивается» при изменении суммы
   countUp($('#hero-amount'), heroShown == null ? total : heroShown, total, (v) => fmtMoney(v, b, { short: true }));
   heroShown = total;
@@ -1757,7 +1843,7 @@ function renderAnalytics() {
 
   box.innerHTML = `
     <div class="stats">
-      <div class="stat wide"><div class="stat-label">Всего потрачено</div><div class="stat-value">${fmtMoney(total, b, { short: true })}</div>
+      <div class="stat wide"><div class="stat-label">Всего потрачено</div><div class="stat-value" id="an-total">${fmtMoney(total, b, { short: true })}</div>
         <div class="stat-foot">${cmp && cmp.pct != null ? `${deltaBadge(cmp.pct)}<span>к ${cmp.label} (${fmtMoney(cmp.prev, b, { short: true })})</span>` : cmp ? `<span>За ${cmp.label} трат не было</span>` : ''}</div></div>
       <div class="stat"><div class="stat-label">В среднем в день</div><div class="stat-value">${fmtMoney(avg, b, { short: true })}</div></div>
       <div class="stat"><div class="stat-label">Покупок</div><div class="stat-value">${list.length}</div></div>
@@ -1783,6 +1869,7 @@ function renderAnalytics() {
     ${curRows.some((x) => x.code !== b && x.origRated > 0) ? `<div class="card"><h3>Средний курс трат</h3><p class="card-sub">По какому курсу вы тратили каждую валюту и сколько это стоило бы сегодня</p><div id="avg-rates"></div></div>` : ''}
     <div class="card"><h3>Топ-5 покупок</h3><div class="tx-list" style="box-shadow:none;border:0;margin:6px -16px -16px;border-radius:0">${top5.map((e) => txRow(e, { showDate: true })).join('')}</div></div>`;
 
+  rollNumber('an-total', $('#an-total'), total, (v) => fmtMoney(v, b, { short: true }));
   renderAvgRates(curRows);
   const draw = () => {
     if (App.tab !== 'analytics' || analyticsRange !== r) return;
@@ -1965,13 +2052,13 @@ function renderBudgets() {
     const left = tb - total, daysLeft = daysBetween(today, to) + 1;
     totalHtml = `<div class="card budget-total" data-action="budget-edit" data-id="total" role="button">
       <div class="stat-label">Общий лимит на месяц</div>
-      <div class="big">${fmtMoney(total, b, { short: true })} <span class="muted" style="font-size:18px;font-weight:650">из ${fmtMoney(tb, b, { short: true })}</span></div>
+      <div class="big"><span id="bu-total">${fmtMoney(total, b, { short: true })}</span> <span class="muted" style="font-size:18px;font-weight:650">из ${fmtMoney(tb, b, { short: true })}</span></div>
       <div class="progress ${cls}"><i style="width:${clamp(p * 100, 0, 100)}%"></i></div>
       <div class="meta"><span class="${cls === 'over' ? 'bad-text' : cls === 'warn' ? 'warn-text' : ''}">${left >= 0 ? `Осталось ${fmtMoney(left, b, { short: true })}` : `Превышен на ${fmtMoney(-left, b, { short: true })}`} · ${fmtPct(p)}</span>
       ${isCurrent && left > 0 ? `<span>≈ ${fmtMoney(left / daysLeft, b, { short: true })} в день до конца месяца</span>` : ''}</div></div>`;
   } else {
     totalHtml = `<div class="card budget-total" data-action="budget-edit" data-id="total" role="button">
-      <div class="stat-label">Потрачено за месяц</div><div class="big">${fmtMoney(total, b, { short: true })}</div>
+      <div class="stat-label">Потрачено за месяц</div><div class="big" id="bu-total">${fmtMoney(total, b, { short: true })}</div>
       <p class="card-sub" style="margin:8px 0 0">Общий лимит не задан. <span class="link-btn">Задать лимит</span></p></div>`;
   }
   const spentBy = {};
@@ -2001,6 +2088,7 @@ function renderBudgets() {
     <div class="section-head" style="margin-top:20px"><h2>По категориям</h2></div>
     <div class="list">${rows}</div>
     <p class="hint">Полоска становится жёлтой при 80% лимита и красной при превышении. Лимиты — в основной валюте (${b}).</p>`;
+  rollNumber('bu-total-' + from, $('#bu-total'), total, (v) => fmtMoney(v, b, { short: true }));
 }
 function openBudgetEditor(id) {
   const st = S(), b = base();
@@ -2319,6 +2407,7 @@ function openExpenseForm({ id = null, prefill = null, onSaved = null, kind = nul
     App.flash(rec.id);
     Sheet.close(s);
     Store.commit();
+    if (!editing) fabSuccess();
     toast(editing ? 'Изменения сохранены' : income ? `Доход: +${fmtMoney(rec.amount, rec.currency)}` : `Добавлено: ${fmtMoney(rec.amount, rec.currency)}`);
   });
   if (editing) {
@@ -2342,6 +2431,14 @@ function openExpenseForm({ id = null, prefill = null, onSaved = null, kind = nul
 
 /** Удаление с возможностью отмены. */
 function deleteExpense(id) {
+  const row = document.querySelector(`.view.active .tx[data-id="${CSS.escape(id)}"]`);
+  if (row && !row.dataset.leaving) {
+    row.dataset.leaving = '1';
+    const list = row.parentElement, head = list.previousElementSibling;
+    const targets = list.children.length === 1 ? [list, head && head.classList.contains('day-head') ? head : null].filter(Boolean) : [row];
+    Promise.all(targets.map((t) => collapseOut(t))).then(() => deleteExpense(id));
+    return;
+  }
   const st = S();
   const key = st.expenses.some((e) => e.id === id) ? 'expenses' : 'incomes';
   const arr = st[key];
@@ -2374,6 +2471,7 @@ async function quickAddTemplate(id) {
     st.expenses.push(e);
     App.flash(e.id);
     Store.commit();
+    fabSuccess();
     if (navigator.vibrate) navigator.vibrate(8);
     toast(`Добавлено: ${t.name} · ${fmtMoney(t.amount, t.currency)}`, { action: 'Отменить', onAction: () => { st.expenses = st.expenses.filter((x) => x.id !== e.id); Store.commit(); } });
   } finally { tplBusy = false; }
@@ -3180,6 +3278,7 @@ function openInboxSheet() {
     if (t.closest('[data-ib-edit]')) { openForm(it); return; }
     if (t.closest('[data-ib-del]')) {
       const copy = { ...it };
+      await collapseOut(card, -1);
       S().inbox = S().inbox.filter((x) => x.id !== it.id);
       Store.commit();
       toast('Удалено из «Входящих»', { action: 'Отменить', onAction: () => restore([copy], []) });
@@ -3191,8 +3290,10 @@ function openInboxSheet() {
         const copy = { ...it };
         const e = await addOne(it);
         if (!e) return;
+        await collapseOut(card, 1);
         App.flash(e.id);
         Store.commit();
+        fabSuccess();
         if (navigator.vibrate) navigator.vibrate(8);
         toast(`Добавлено: ${fmtMoney(e.amount, e.currency)}`, { action: 'Отменить', onAction: () => restore([copy], [e.id]) });
       } finally { busy = false; }
@@ -3448,6 +3549,103 @@ function countUp(el, from, to, fmt, ms = 650) {
   el.textContent = fmt(from);
   requestAnimationFrame(step);
 }
+const EASE_OUT = 'cubic-bezier(.2,.8,.2,1)';
+/** Строки и карточки появляются «лесенкой» (только первые — те, что видны на экране). */
+function staggerIn(root, selector, { step = 32, start = 0, max = 12 } = {}) {
+  if (!root || !root.animate || reduceMotion()) return;
+  $$(selector, root).filter((el) => el.offsetParent !== null).slice(0, max).forEach((el, i) => {
+    el.animate([{ opacity: 0, transform: 'translateY(10px)' }, { opacity: 1, transform: 'none' }], { duration: 380, delay: start + i * step, easing: EASE_OUT, fill: 'backwards' });
+  });
+}
+const STAGGER_ROWS = ':scope > .card, :scope > .list, .stats > *, .tx-list > .tx, .list > .row, .list > .budget-row';
+/** Въезд блока: dir > 0 — справа, dir < 0 — слева, 0 — снизу; строки внутри — «лесенкой». */
+function slideIn(el, dir = 0) {
+  if (!el || !el.animate || reduceMotion()) return;
+  el.animate([{ opacity: 0, transform: dir ? `translateX(${dir < 0 ? -22 : 22}px)` : 'translateY(8px)' }, { opacity: 1, transform: 'none' }], { duration: 320, easing: EASE_OUT });
+  staggerIn(el, STAGGER_ROWS, { start: 60 });
+}
+/** Плавно схлопывает элемент (удаление, скрытие). dir — куда уезжает: −1 влево, 1 вправо, 0 — просто тает. */
+function collapseOut(el, dir = 0) {
+  if (!el || !el.animate || reduceMotion() || !el.isConnected) return Promise.resolve();
+  const h = el.offsetHeight, cs = getComputedStyle(el);
+  el.style.overflow = 'hidden';
+  return el.animate([
+    { height: h + 'px', opacity: 1, transform: 'none', marginTop: cs.marginTop, marginBottom: cs.marginBottom, paddingTop: cs.paddingTop, paddingBottom: cs.paddingBottom },
+    { height: h + 'px', opacity: 0, transform: `translateX(${dir * 40}px) scale(.97)`, offset: 0.55 },
+    { height: '0px', opacity: 0, transform: `translateX(${dir * 40}px) scale(.97)`, marginTop: '0px', marginBottom: '0px', paddingTop: '0px', paddingBottom: '0px' },
+  ], { duration: 340, easing: 'cubic-bezier(.4,0,.2,1)', fill: 'forwards' }).finished.catch(() => {});
+}
+/** Примеры в строке «ввод фразой» плавно сменяют друг друга. */
+const PhraseHints = {
+  list: ['кофе 120', 'такси 380 вчера', 'зарплата 45к', 'обед 450 #работа', 'продукты 1 250'],
+  i: 0,
+  start() {
+    setInterval(() => {
+      const el = $('#ph-ex');
+      if (!el || !el.animate || reduceMotion() || document.hidden || App.tab !== 'home' || Sheet.stack.length || $('#phrase-in').value) return;
+      this.i = (this.i + 1) % this.list.length;
+      el.animate([{ opacity: 1, transform: 'none' }, { opacity: 0, transform: 'translateY(-7px)' }], { duration: 200, easing: 'ease-in' }).finished.then(() => {
+        el.textContent = this.list[this.i];
+        el.animate([{ opacity: 0, transform: 'translateY(7px)' }, { opacity: 1, transform: 'none' }], { duration: 260, easing: EASE_OUT });
+      }).catch(() => {});
+    }, 3600);
+  },
+};
+/** Число «докручивается» от прошлого показанного значения (для каждого места — своё). */
+const shownNumbers = {};
+function rollNumber(key, el, value, fmt) {
+  if (!el) return;
+  const from = key in shownNumbers ? shownNumbers[key] : 0;
+  shownNumbers[key] = value;
+  countUp(el, from, value, fmt, 700);
+}
+/** «+» на миг превращается в зелёную галочку — запись добавлена. */
+function fabSuccess() {
+  const f = $('#fab');
+  if (!f || reduceMotion()) return;
+  f.classList.remove('done');
+  void f.offsetWidth;
+  f.classList.add('done');
+  clearTimeout(f._doneT);
+  f._doneT = setTimeout(() => f.classList.remove('done'), 1200);
+}
+/**
+ * Скользящий «бегунок» у переключателей (.seg): плавно переезжает к выбранному пункту.
+ * Работает для всех переключателей, в том числе появляющихся в листах.
+ */
+const SegThumb = {
+  init() {
+    const scan = (root) => { if (root.matches && root.matches('.seg')) this.attach(root); $$('.seg', root).forEach((x) => this.attach(x)); };
+    scan(document.body);
+    new MutationObserver((muts) => {
+      for (const m of muts) {
+        if (m.type === 'childList') m.addedNodes.forEach((n) => { if (n.nodeType === 1) scan(n); });
+        else if (m.target.parentElement && m.target.parentElement.classList.contains('has-thumb')) this.update(m.target.parentElement, true);
+      }
+    }).observe(document.body, { subtree: true, childList: true, attributes: true, attributeFilter: ['class'] });
+  },
+  attach(seg) {
+    if (seg._thumb) return;
+    const t = document.createElement('i');
+    t.className = 'seg-thumb';
+    seg.prepend(t);
+    seg._thumb = t;
+    seg.classList.add('has-thumb');
+    if (window.ResizeObserver) new ResizeObserver(() => this.update(seg, false)).observe(seg);
+    this.update(seg, false);
+  },
+  update(seg, animate) {
+    const t = seg._thumb, on = seg.querySelector(':scope > button.on');
+    if (!t) return;
+    if (!on || !on.offsetWidth) { t.style.opacity = '0'; return; }
+    if (!animate || t.style.opacity === '0' || !t.style.width) t.style.transition = 'none';
+    t.style.opacity = '1';
+    t.style.width = on.offsetWidth + 'px';
+    t.style.height = on.offsetHeight + 'px';
+    t.style.transform = `translate(${on.offsetLeft}px, ${on.offsetTop}px)`;
+    if (t.style.transition === 'none') { void t.offsetWidth; t.style.transition = ''; }
+  },
+};
 /** Небольшой праздничный салют (цель достигнута, долг закрыт). */
 function confetti(x = window.innerWidth / 2, y = window.innerHeight * 0.35) {
   if (reduceMotion() || !document.body.animate) return;
@@ -3508,11 +3706,12 @@ function renderPlans() {
 }
 function setPlanTab(tab) {
   if (tab === PlanView.tab) return;
+  const prev = PlanView.tab;
   PlanView.tab = tab;
   try { localStorage.setItem('traty.plan', tab); } catch (e) { /* не критично */ }
+  const order = ['budgets', 'goals', 'debts'], dir = order.indexOf(tab) - order.indexOf(prev);
   renderPlans();
-  const box = PlanView.tab === 'budgets' ? $('#bu-wrap') : $('#pl-content');
-  box.classList.remove('swap-in'); void box.offsetWidth; box.classList.add('swap-in');
+  slideIn(PlanView.tab === 'budgets' ? $('#bu-wrap') : $('#pl-content'), dir);
 }
 
 /* ---------- Цели накоплений ---------- */
@@ -3558,6 +3757,7 @@ function renderGoals() {
   const curKeys = Object.keys(byCur);
   const main = byCur[base()] ? base() : curKeys[0];
   const m = byCur[main], mp = m.target ? m.saved / m.target : 0;
+  setTimeout(() => rollNumber('goal-sum', $('#goal-sum'), m.saved, (v) => fmtMoney(v, main, { short: true })), 0);
   const done = goals.filter((g) => g.doneAt).length;
   box.innerHTML = `<div class="card plan-summary">
       <div class="stat-label">Накоплено${curKeys.length > 1 ? ` в ${main}` : ''}</div>
@@ -4014,11 +4214,14 @@ async function submitPhrase() {
   try {
     const e = await addFromPhrase(p);
     if (!e) { toast('Нет курса без интернета — введите его вручную'); openPhraseForm(); return; }
+    const card = $('#phrase-prev .ph-card');
+    if (card && card.animate && !reduceMotion()) await card.animate([{ transform: 'none', opacity: 1 }, { transform: 'translateY(14px) scale(.96)', opacity: 0 }], { duration: 220, easing: 'ease-in' }).finished.catch(() => {});
     input.value = '';
     renderPhrasePreview();
     input.blur();
     App.flash(e.id);
     Store.commit();
+    fabSuccess();
     if (navigator.vibrate) navigator.vibrate(8);
     const inc = isIncome(e);
     toast(`${inc ? 'Доход' : 'Добавлено'}: ${(p.comment || catOf(e).name)} · ${inc ? '+' : ''}${fmtMoney(e.amount, e.currency)}`, {
@@ -4775,11 +4978,11 @@ const Actions = {
   'period-prev': () => shiftPeriod(-1),
   'period-next': () => shiftPeriod(1),
   'open-cat': (el) => openCategorySheet(el.dataset.id, analyticsRange),
-  'budget-prev': () => { BudgetView.anchor = addMonths(BudgetView.anchor, -1); App.render('budgets'); },
-  'budget-next': () => { BudgetView.anchor = addMonths(BudgetView.anchor, 1); App.render('budgets'); },
+  'budget-prev': () => { BudgetView.anchor = addMonths(BudgetView.anchor, -1); App.render('budgets'); slideIn($('#bu-content'), -1); },
+  'budget-next': () => { BudgetView.anchor = addMonths(BudgetView.anchor, 1); App.render('budgets'); slideIn($('#bu-content'), 1); },
   'budget-edit': (el) => openBudgetEditor(el.dataset.id),
   'backup-now': () => exportJSON(),
-  'backup-later': () => { S().meta.backupSnoozeAt = Date.now(); Store.commit(); toast('Напомню через неделю'); },
+  'backup-later': async (el) => { await collapseOut(el.closest('.banner')); S().meta.backupSnoozeAt = Date.now(); Store.commit(); toast('Напомню через неделю'); },
   'demo-clear': async () => {
     const ok = await confirmSheet({ title: 'Очистить демо-данные?', text: 'Будут удалены только демонстрационные покупки. Ваши записи, категории и настройки останутся.', ok: 'Очистить', danger: true });
     if (!ok) return;
@@ -4792,7 +4995,10 @@ const Actions = {
   currencies: () => openCurrenciesSheet(),
   categories: () => openCategoriesSheet(),
   payments: () => openPaymentsSheet(),
-  theme: (el) => { S().settings.theme = el.dataset.v; Store.save(); applyTheme(); renderSettings(); },
+  theme: (el) => {
+    const run = () => { S().settings.theme = el.dataset.v; Store.save(); applyTheme(); renderSettings(); };
+    if (document.startViewTransition && !reduceMotion()) document.startViewTransition(run); else run();
+  },
   'export-json': () => exportJSON(),
   'export-csv': () => exportCSV(),
   import: () => $('#import-file').click(),
@@ -4809,7 +5015,7 @@ const Actions = {
   'debt-new': () => openDebtEditor(null),
   'debt-open': (el) => openDebtSheet(el.dataset.id),
   'month-summary': (el) => openMonthSummary(el.dataset.m),
-  'summary-hide': (el) => { S().meta.summarySeen = el.dataset.m; Store.save(); renderBanners(); },
+  'summary-hide': async (el) => { await collapseOut(el.closest('.banner')); S().meta.summarySeen = el.dataset.m; Store.save(); renderBanners(); },
   'phrase-form': () => openPhraseForm(),
   'share-app': () => shareApp(),
   inbox: () => openInboxSheet(),
@@ -4877,6 +5083,7 @@ function bindStatic() {
     Period.type = x.dataset.period;
     if (Period.type === 'custom' && !Period.from) { Period.from = monthStart(todayISO()); Period.to = todayISO(); }
     App.render('analytics');
+    slideIn($('#an-content'));
   });
   const onRange = () => {
     const a = $('#an-from').value, b = $('#an-to').value;
@@ -4908,6 +5115,9 @@ function init() {
   setupViewport();
   bindStatic();
   App.go('home');
+  slideIn($('#view-home'));
+  SegThumb.init();
+  PhraseHints.start();
   chartReady = loadChartJs();
   registerServiceWorker();
   maybeShowInstallHint();
