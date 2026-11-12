@@ -447,6 +447,8 @@ button.row:active { background: var(--surface-2); }
 .ios-ico svg.i { width: 17px; height: 17px; }
 .note { padding: 12px 14px; border-radius: 14px; background: rgba(242, 165, 22, .12); font-size: 14px; color: var(--text); margin-bottom: 14px; }
 .install-hero { display: flex; justify-content: center; margin: 4px 0 10px; }
+.ins-title { text-align: center; font-size: 22px; font-weight: 750; margin: 0 0 10px; }
+.ins-feats { list-style: none; padding: 0; margin: 0 0 18px; display: grid; gap: 8px; font-size: 15px; color: var(--text-2); }
 .install-hero img { width: 72px; height: 72px; border-radius: 18px; box-shadow: var(--shadow); }
 
 .toast-root { position: fixed; left: 0; right: 0; bottom: calc(var(--tabbar-h) + var(--sab) + 22px); z-index: 200; display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 0 16px; pointer-events: none; }
@@ -603,7 +605,7 @@ details.adv[open] summary { margin-bottom: 10px; }
 /* =====================================================================
    1. Константы и утилиты
    ===================================================================== */
-const APP_VERSION = '1.4.0';
+const APP_VERSION = '1.5.0';
 const STORAGE_KEY = 'traty.data.v1';
 const RATES_KEY = 'traty.rates.v1';
 const THEME_KEY = 'traty.theme';
@@ -1844,7 +1846,8 @@ function renderSettings() {
       ${demoN ? row('✨', 'Очистить демо-данные', demoN, 'demo-clear') : ''}
       ${row('🌐', 'Кэш курсов валют', Rates.count(), 'clear-rates')}
       ${deferredInstall ? row('⬇️', 'Установить приложение', '', 'install-android') : ''}
-      ${row('📲', 'Как установить на iPhone', isStandalone() ? 'установлено' : '', 'install-hint')}
+      ${row('📲', 'Как установить', isStandalone() ? 'установлено' : '', 'install-hint')}
+      ${row('💌', 'Поделиться приложением<small>Ссылка сразу покажет, как установить</small>', '', 'share-app')}
       <button class="row danger" data-action="wipe"><span class="ri">🗑️</span><span class="rl">Удалить все данные</span></button>
     </div>
     <div class="about">Траты ${APP_VERSION} · ${Inbox.configured() ? 'покупки хранятся на этом устройстве, сервер «Входящих» лишь передаёт новые траты' : 'данные хранятся только на этом устройстве'}<br>Курсы: Frankfurter, currency-api, ExchangeRate-API</div>`;
@@ -3166,30 +3169,99 @@ function backupDue() {
   const last = Math.max(m.lastBackupAt || 0, m.backupSnoozeAt || 0, m.createdAt || 0);
   return Date.now() - last > 7 * DAY_MS && S().expenses.some((e) => !e.demo);
 }
-function openInstallSheet() {
+/* --- Установка: подсказки для iPhone, Android и встроенных браузеров мессенджеров --- */
+const isAndroid = () => /Android/i.test(navigator.userAgent);
+/** Встроенный браузер Telegram, Instagram, WhatsApp и т. п.: оттуда на экран «Домой» не добавить. */
+const isInAppBrowser = () => /FBAN|FBAV|FB_IAB|Instagram|Line\/|Twitter|Snapchat|TikTok|musical_ly|BytedanceWebview|Telegram|WhatsApp|VKClient|MicroMessenger|GSA\/|; wv\)/i.test(navigator.userAgent);
+/** Адрес приложения (без index.html и параметров) и ссылка-приглашение, которая сразу открывает подсказку по установке. */
+const appLink = () => location.origin + location.pathname.replace(/index\.html$/, '');
+const inviteLink = () => appLink() + '?install';
+
+/** Окно установки. welcome — с приветствием для нового человека. Само подстраивается под устройство. */
+function openInstallSheet({ welcome = false } = {}) {
   const s = Sheet.open({
-    title: 'Установка на iPhone',
-    body: `<div class="install-hero"><img src="icons/apple-touch-icon.png" alt=""></div>
-      <p class="sheet-text" style="text-align:center">Добавьте «Траты» на экран «Домой» — приложение откроется во весь экран и будет работать без интернета.</p>
-      <ol class="steps">
-        <li><span class="n">1</span><span>Нажмите <b>«Поделиться»</b> <span class="ios-ico">${icon('share')}</span> в панели Safari. В iOS 26 она спрятана в меню <span class="ios-ico">${icon('dots')}</span>.</span></li>
-        <li><span class="n">2</span><span>Пролистайте список и выберите <b>«На экран „Домой“»</b> <span class="ios-ico">${icon('plusSq')}</span>.</span></li>
-        <li><span class="n">3</span><span>Оставьте включённым «Открыть как веб-приложение» и нажмите <b>«Добавить»</b>.</span></li>
-      </ol>
-      <div class="note">⚠️ Safari и приложение на экране «Домой» хранят данные раздельно. Установите приложение сейчас и вносите траты уже в нём — или перенесите данные через экспорт и импорт JSON.</div>`,
+    title: welcome ? 'Добро пожаловать' : 'Установка приложения',
+    body: '<div id="ins-box"></div>',
     foot: '<button class="btn btn-primary" data-ok>Понятно</button>',
+    refresh: () => render(),
+  });
+  const render = () => {
+    const ios = isIOS(), android = isAndroid(), inApp = isInAppBrowser();
+    let how = '';
+    if (isStandalone()) {
+      how = '<div class="note" style="background:var(--accent-soft)">✅ Приложение уже установлено и открыто с экрана «Домой».</div>';
+    } else if (inApp) {
+      how = `<div class="note">⚠️ Ссылка открыта внутри другого приложения (Telegram, Instagram, WhatsApp…). Отсюда добавить «Траты» на экран «Домой» нельзя — нужен ${ios ? 'Safari' : 'Chrome'}.</div>
+        <ol class="steps">
+          <li><span class="n">1</span><span>Нажмите меню <b>«•••»</b> или значок браузера в углу и выберите <b>«Открыть в ${ios ? 'Safari' : 'браузере'}»</b>.</span></li>
+          <li><span class="n">2</span><span>Если такого пункта нет — скопируйте ссылку кнопкой ниже, откройте <b>${ios ? 'Safari' : 'Chrome'}</b> и вставьте её в адресную строку.</span></li>
+        </ol>
+        <button class="btn btn-secondary" data-copy-link>Скопировать ссылку</button>`;
+    } else if (ios) {
+      how = `<ol class="steps">
+          <li><span class="n">1</span><span>Нажмите <b>«Поделиться»</b> <span class="ios-ico">${icon('share')}</span> в панели Safari. В iOS 26 она спрятана в меню <span class="ios-ico">${icon('dots')}</span>.</span></li>
+          <li><span class="n">2</span><span>Пролистайте список и выберите <b>«На экран „Домой“»</b> <span class="ios-ico">${icon('plusSq')}</span>.</span></li>
+          <li><span class="n">3</span><span>Оставьте включённым «Открыть как веб-приложение» и нажмите <b>«Добавить»</b>.</span></li>
+        </ol>
+        <div class="note">⚠️ Safari и приложение на экране «Домой» хранят данные раздельно. Установите приложение сейчас и вносите траты уже в нём.</div>`;
+    } else if (android) {
+      how = deferredInstall
+        ? '<p class="sheet-text">Установите «Траты» как обычное приложение — оно появится на главном экране и будет работать без интернета.</p><button class="btn btn-primary" data-install>Установить приложение</button>'
+        : `<ol class="steps">
+            <li><span class="n">1</span><span>Откройте меню браузера <b>⋮</b> (в Chrome — справа вверху).</span></li>
+            <li><span class="n">2</span><span>Выберите <b>«Установить приложение»</b> или <b>«Добавить на главный экран»</b>.</span></li>
+          </ol>`;
+    } else {
+      how = `<p class="sheet-text">«Траты» сделаны для телефона: откройте эту ссылку на iPhone (в Safari) или на Android (в Chrome) и добавьте на экран «Домой».</p>
+        ${deferredInstall ? '<button class="btn btn-secondary" data-install style="margin-bottom:10px">Установить на этот компьютер</button>' : ''}
+        <button class="btn btn-secondary" data-copy-link>Скопировать ссылку</button>`;
+    }
+    $('#ins-box', s.sheet).innerHTML = `<div class="install-hero"><img src="icons/apple-touch-icon.png" alt=""></div>
+      ${welcome ? `<h3 class="ins-title">Траты — учёт расходов</h3>
+        <ul class="ins-feats">
+          <li>⚡ Покупка за пару секунд, шаблоны частых трат</li>
+          <li>💱 Разные валюты с автоматическим курсом</li>
+          <li>📊 Аналитика и бюджеты по категориям</li>
+          <li>🔒 Данные хранятся только на вашем телефоне, работает без интернета</li>
+        </ul>` : '<p class="sheet-text" style="text-align:center">Добавьте «Траты» на экран «Домой» — приложение откроется во весь экран и будет работать без интернета.</p>'}
+      ${how}`;
+  };
+  s.body.addEventListener('click', async (e) => {
+    if (e.target.closest('[data-copy-link]')) copyText(appLink(), 'Ссылка скопирована');
+    if (e.target.closest('[data-install]') && deferredInstall) {
+      deferredInstall.prompt();
+      const r = await deferredInstall.userChoice.catch(() => null);
+      deferredInstall = null;
+      if (r && r.outcome === 'accepted') Sheet.close(s); else render();
+      App.dirty.add('settings');
+    }
   });
   $('[data-ok]', s.sheet).addEventListener('click', () => Sheet.close(s));
+  render();
 }
+/** Первое открытие в браузере (или ссылка-приглашение с ?install) — показать, как установить. */
 function maybeShowInstallHint() {
   const st = S();
-  if (!isIOS() || isStandalone() || st.meta.installHintShown) return;
+  const forced = new URLSearchParams(location.search).has('install');
+  if (forced) history.replaceState(null, '', location.pathname + location.hash); // чтобы ?install не попал в закладку
+  if (isStandalone()) return;
+  if (!forced && (st.meta.installHintShown || !(isIOS() || isAndroid() || isInAppBrowser()))) return;
+  const welcome = forced || Store.firstRun;
   setTimeout(() => {
     if (Sheet.stack.length) return; // не перебиваем открытую форму, покажем в следующий раз
     st.meta.installHintShown = true;
     Store.save();
-    openInstallSheet();
-  }, 1500);
+    openInstallSheet({ welcome });
+  }, forced ? 600 : 1500);
+}
+/** «Поделиться приложением»: системное меню «Поделиться» со ссылкой-приглашением или копирование. */
+async function shareApp() {
+  const url = inviteLink();
+  if (navigator.share) {
+    try { await navigator.share({ title: 'Траты', text: 'Учёт расходов: откройте ссылку в Safari (iPhone) или Chrome (Android) и добавьте на экран «Домой».', url }); return; }
+    catch (e) { if (e.name === 'AbortError') return; }
+  }
+  copyText(url, 'Ссылка-приглашение скопирована');
 }
 function registerServiceWorker() {
   if (!('serviceWorker' in navigator) || !/^https?:$/.test(location.protocol)) return;
@@ -3287,6 +3359,7 @@ const Actions = {
     if (ok) { Rates.clear(); renderSettings(); toast('Кэш курсов очищен'); }
   },
   'install-hint': () => openInstallSheet(),
+  'share-app': () => shareApp(),
   inbox: () => openInboxSheet(),
   'inbox-setup': () => openInboxSetupSheet(),
   'merchant-rules': () => openMerchantRulesSheet(),
@@ -3358,7 +3431,7 @@ function bindStatic() {
   darkMQ.addEventListener('change', () => { if (S().settings.theme === 'system') applyTheme(); });
   window.addEventListener('online', () => { resolvePending(); App.refresh(); Inbox.sync(); });
   window.addEventListener('offline', () => toast('Нет интернета — курсы можно ввести вручную'));
-  window.addEventListener('beforeinstallprompt', (e) => { e.preventDefault(); deferredInstall = e; App.dirty.add('settings'); });
+  window.addEventListener('beforeinstallprompt', (e) => { e.preventDefault(); deferredInstall = e; App.dirty.add('settings'); Sheet.refreshAll(); });
   document.addEventListener('visibilitychange', () => {
     if (document.hidden) return;
     if (App.day !== todayISO()) { App.day = todayISO(); Period.anchor = todayISO(); App.refresh(); } // наступил новый день
