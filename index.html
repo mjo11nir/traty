@@ -486,6 +486,10 @@ details.adv[open] summary { margin-bottom: 10px; }
 .sheet-form.income .amount-input, .sheet-form.income .amount-cur { color: var(--ok); }
 .sheet-form .amount-input { transition: color .25s; }
 .receipt-chip { gap: 6px; }
+.receipt-field { margin-top: 12px; }
+.ai-note { display: block; margin-top: 8px; font-size: 13px; color: var(--accent-text); animation: rowIn2 .3s var(--ease); }
+.phrase.thinking .ph-ico { animation: spin 1s linear infinite; display: inline-block; }
+@keyframes rowIn2 { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
 .receipt-chip .soon { font-size: 11px; font-weight: 700; padding: 2px 6px; border-radius: 6px; background: var(--accent-soft); color: var(--accent-text); }
 .hero-inc { display: flex; justify-content: space-between; gap: 10px; flex-wrap: wrap; margin-top: 12px; padding-top: 11px; border-top: 1px solid rgba(255, 255, 255, .18); font-size: 13.5px; }
 .hero-inc span { opacity: .9; } .hero-inc b { font-weight: 750; opacity: 1; }
@@ -831,12 +835,12 @@ details.adv[open] summary { margin-bottom: 10px; }
 /* =====================================================================
    1. Константы и утилиты
    ===================================================================== */
-const APP_VERSION = '1.7.0';
+const APP_VERSION = '1.7.2';
 const STORAGE_KEY = 'traty.data.v1';
 const RATES_KEY = 'traty.rates.v1';
 const THEME_KEY = 'traty.theme';
-const AI_CONFIG_KEY = 'traty.ai.config.v1';
-const AI_DEFAULT_URL = 'https://traty-ai.traty-758cef38.workers.dev';
+/** Сервер ИИ-помощника (Gemini). Доступ — по личному ключу «Входящих», настраивать ничего не нужно. */
+const AI_URL = 'https://traty-ai.traty-758cef38.workers.dev';
 const CHART_URL = 'https://cdn.jsdelivr.net/npm/chart.js@4.5.1/dist/chart.umd.min.js';
 const FRANKFURTER = 'https://api.frankfurter.dev/v2';
 /** Сервер «Входящие» по умолчанию (траты из Apple Pay и SMS). Свой сервер можно указать в настройках. */
@@ -986,26 +990,31 @@ const fmtRateInput = (r) => String(sig(r, 6)).replace('.', ',');
 const fmtCompact = (v) => nf({ notation: 'compact', maximumFractionDigits: 1 }).format(v);
 const fmtPct = (x) => nf({ style: 'percent', maximumFractionDigits: Math.abs(x) < 0.1 ? 1 : 0 }).format(x);
 
-const AIConfig = {
-  load() { try { return { endpoint: AI_DEFAULT_URL, ...JSON.parse(localStorage.getItem(AI_CONFIG_KEY) || '{}') }; } catch (e) { return { endpoint: AI_DEFAULT_URL, token: '' }; } },
-  save(value) { try { localStorage.setItem(AI_CONFIG_KEY, JSON.stringify(value)); return true; } catch (e) { return false; } },
-};
-async function aiRequest(path, payload) {
-  const config = AIConfig.load();
-  if (!config.endpoint || !config.token) throw new Error('Сначала настройте Worker и токен в разделе «Настройки → ИИ».');
-  const endpoint = config.endpoint.trim().replace(/\/+$/, '');
-  let url;
-  try { url = new URL(endpoint); } catch (e) { throw new Error('Проверьте адрес AI Worker в настройках.'); }
-  if (url.protocol !== 'https:' && url.hostname !== 'localhost') throw new Error('AI Worker должен использовать HTTPS.');
-  const res = await fetch(endpoint + path, {
-    method: path.endsWith('/health') ? 'GET' : 'POST',
-    headers: { Authorization: `Bearer ${config.token}`, ...(path.endsWith('/health') ? {} : { 'Content-Type': 'application/json' }) },
-    ...(path.endsWith('/health') ? {} : { body: JSON.stringify(payload) }),
-  });
-  let data;
-  try { data = await res.json(); } catch (e) { data = {}; }
-  if (!res.ok || data.ok === false) throw new Error(data.error || (res.status === 401 ? 'Неверный AI-токен.' : `Ошибка Worker (${res.status}).`));
-  return data;
+/**
+ * Запрос к ИИ-помощнику. Ключ — тот же, что у «Входящих» (если его нет — приложение получит его само).
+ * Ошибки — короткими понятными фразами; null-ответов нет: либо результат, либо исключение.
+ */
+async function aiRequest(path, payload, { timeout = 25000 } = {}) {
+  if (navigator.onLine === false) throw new Error('Нет интернета');
+  await ensureConnected();
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), timeout);
+  let res, data = {};
+  try {
+    res = await fetch(AI_URL + path, {
+      method: payload ? 'POST' : 'GET', signal: ctrl.signal, cache: 'no-store',
+      headers: { Authorization: 'Bearer ' + S().settings.inbox.token, ...(payload ? { 'Content-Type': 'application/json' } : {}) },
+      body: payload ? JSON.stringify(payload) : undefined,
+    });
+    try { data = await res.json(); } catch (e) { data = {}; }
+  } catch (e) {
+    throw new Error(e.name === 'AbortError' ? 'ИИ долго не отвечает — попробуйте ещё раз' : 'Не удалось связаться с ИИ');
+  } finally { clearTimeout(timer); }
+  if (!res.ok || data.ok === false) {
+    const msg = { limit: 'Лимит ИИ на сегодня исчерпан — завтра снова заработает', busy: 'ИИ сейчас перегружен — попробуйте через минуту', too_large: 'Фото слишком большое', bad_image: 'Не получилось прочитать фото' }[data.error];
+    throw new Error(msg || 'ИИ временно недоступен');
+  }
+  return data.result || {};
 }
 function aiCategoryList() { return S().categories.map((c) => ({ id: c.id, name: c.name })); }
 function fileDataURL(file) {
@@ -2181,7 +2190,6 @@ function renderSettings() {
   const row = (ico, label, value, action, extra = '') => `<button class="row" data-action="${action}" ${extra}><span class="ri">${ico}</span><span class="rl">${label}</span><span class="rv">${value}</span>${icon('chev', 18).replace('class="i"', 'class="i chev"')}</button>`;
   const lastBackup = st.meta.lastBackupAt ? fmtDay(toISO(new Date(st.meta.lastBackupAt))) : 'не было';
   const demoN = st.expenses.filter((e) => e.demo).length;
-  const ai = AIConfig.load();
   $('#st-content').innerHTML = `
     <div class="group-title">Валюты</div>
     <div class="list">
@@ -2195,14 +2203,6 @@ function renderSettings() {
       ${row('💳', 'Способы оплаты', st.settings.paymentMethods.length, 'payments')}
       ${row('🎯', 'Бюджеты, цели и долги', st.settings.totalBudget ? fmtMoney(st.settings.totalBudget, b, { short: true }) : '', 'go', 'data-tab="budgets"')}
     </div>
-    <div class="group-title">ИИ-помощник</div>
-    <div class="card">
-      <h3>Gemini</h3>
-      <p class="card-sub">Подскажет категорию или распознает чек. Текст и фото отправляются в Google Gemini только после нажатия кнопки. Покупка сохраняется после вашей проверки.</p>
-      <div class="field"><label class="field-label" for="ai-endpoint">Адрес AI Worker</label><input class="input" id="ai-endpoint" type="url" inputmode="url" autocomplete="url" value="${esc(ai.endpoint || AI_DEFAULT_URL)}" placeholder="https://traty-ai.…workers.dev"></div>
-      <div class="field"><label class="field-label" for="ai-token">Токен доступа к Worker</label><input class="input" id="ai-token" type="password" autocomplete="new-password" value="${esc(ai.token || '')}" placeholder="Вставьте тот же секрет, что в Cloudflare"></div>
-      <p class="hint" id="ai-status">${ai.token ? 'Токен сохранён на этом устройстве; он не попадает в экспорт данных.' : 'Добавьте два секрета в Cloudflare Worker, затем укажите токен здесь.'}</p>
-      <button class="btn btn-secondary" id="ai-save">Сохранить и проверить соединение</button>
     <div class="group-title">Автоматический ввод</div>
     <div class="list">
       ${row('🏦', 'Траты из Apple Pay и SMS', Inbox.configured() ? 'подключено' : 'настроить', 'inbox-setup')}
@@ -2233,23 +2233,6 @@ function renderSettings() {
       ${row('💌', 'Поделиться приложением<small>Ссылка сразу покажет, как установить</small>', '', 'share-app')}
       <button class="row danger" data-action="wipe"><span class="ri">🗑️</span><span class="rl">Удалить все данные</span></button>
     </div>
-
-  $('#ai-save').addEventListener('click', async () => {
-    const endpoint = $('#ai-endpoint').value.trim().replace(/\/+$/, '');
-    const token = $('#ai-token').value.trim();
-    const status = $('#ai-status');
-    if (!endpoint || !token) { status.textContent = 'Введите адрес Worker и токен доступа.'; return; }
-    if (!AIConfig.save({ endpoint, token })) { status.textContent = 'Не удалось сохранить настройки в этом браузере.'; return; }
-    status.textContent = 'Проверяю соединение…';
-    try {
-      await aiRequest('/api/ai/health');
-      status.textContent = 'Соединение с AI Worker работает. Текст и фото отправляются только по запросу.';
-      toast('AI Worker подключён');
-    } catch (error) {
-      status.textContent = error.message;
-      toast('Не удалось подключиться к AI Worker');
-    }
-  });
     <div class="about">Траты ${APP_VERSION} · ${Inbox.configured() ? 'покупки хранятся на этом устройстве, сервер «Входящих» лишь передаёт новые траты' : 'данные хранятся только на этом устройстве'}<br>Курсы: Frankfurter, currency-api, ExchangeRate-API</div>`;
 }
 
@@ -2294,18 +2277,13 @@ function openExpenseForm({ id = null, prefill = null, onSaved = null, kind = nul
       <div class="chips scroll cur-chips" id="f-curs" aria-label="Валюта">${curList.map((c) => `<button type="button" class="chip sm" data-cur="${c}">${flagOf(c)} ${c}</button>`).join('')}</div>
       <div class="rate-line" id="f-rate-line"></div>
       <div class="rate-edit" id="f-rate-edit" hidden><span id="f-rate-label"></span><input class="input" id="f-rate" type="text" inputmode="decimal" placeholder="Курс" autocomplete="off" aria-label="Курс"><span>${esc(sym(b))}</span><button type="button" class="chip sm" id="f-rate-auto">Авто</button></div>
+      <div class="field receipt-field" id="f-receipt-field"${income ? ' hidden' : ''}><button type="button" class="chip sm receipt-chip" id="f-receipt">📷 Распознать чек</button><span class="ai-note" id="f-ai-note" hidden></span></div>
       <div class="field"><div class="field-label">Категория</div><div class="cat-grid" id="f-cats"></div></div>
       <div class="field"><div class="field-label">Дата</div><div class="chips" id="f-dates">
         <button type="button" class="chip sm" data-d="0">Сегодня</button><button type="button" class="chip sm" data-d="-1">Вчера</button>
         <label class="chip sm date-chip">${icon('calendar', 17)}<span id="f-date-label"></span><input type="date" id="f-date" value="${f.date}" aria-label="Дата покупки"></label></div></div>
       <div class="field"><input class="input" id="f-comment" type="text" placeholder="Комментарий (необязательно)" maxlength="140" enterkeyhint="done" value="${esc(src.comment || '')}"></div>
-      <div class="field"><div class="field-label">Помощь Gemini</div><div class="btn-row">
-        <button type="button" class="btn btn-secondary" id="f-ai-scan">📷 Считать чек</button>
-        <button type="button" class="btn btn-secondary" id="f-ai-suggest">✨ Подсказать категорию</button>
-      </div><input type="file" id="f-receipt-file" accept="image/jpeg,image/png,image/webp" capture="environment" hidden>
-        <div class="hint" id="f-ai-result" aria-live="polite"></div></div>
       <div class="field"><input class="input" id="f-tags" type="text" placeholder="Теги: #отпуск #работа" autocapitalize="none" autocomplete="off" spellcheck="false" enterkeyhint="done" value="${esc((src.tags || []).map((t) => '#' + t).join(' '))}"><div class="chips tag-sugg" id="f-tag-sugg"></div></div>
-      <div class="field" id="f-receipt-field"${income ? ' hidden' : ''}><button type="button" class="chip sm receipt-chip" id="f-receipt">📷 Распознать чек <span class="soon">скоро</span></button></div>
       <div class="field" id="f-pay-field"${income ? ' hidden' : ''}><div class="field-label">Способ оплаты</div><div class="chips" id="f-pay">${st.settings.paymentMethods.map((p) => `<button type="button" class="chip sm${p === f.payment ? ' on' : ''}" data-p="${esc(p)}">${esc(p)}</button>`).join('')}</div></div>`,
     foot: `<button class="btn btn-primary" id="f-save" type="button">${editing ? 'Сохранить' : 'Добавить'}</button>
       ${editing ? `<div class="btn-row"><button class="btn btn-secondary" id="f-dup">Дублировать</button>${income ? '' : '<button class="btn btn-secondary" id="f-tpl">В шаблоны</button>'}<button class="btn btn-danger" id="f-del">Удалить</button></div>` : ''}`,
@@ -2332,10 +2310,47 @@ function openExpenseForm({ id = null, prefill = null, onSaved = null, kind = nul
     q('#f-save').textContent = 'Добавить';
     renderCats();
   });
-  q('#f-receipt').addEventListener('click', () => Receipt.start({ onResult: (r) => {
-    if (r && r.amount > 0) { amountInput.value = String(r.amount).replace('.', ','); renderRate(); }
-    if (r && r.comment && !q('#f-comment').value) q('#f-comment').value = r.comment;
-  } }));
+  const aiNote = (text) => { const n = q('#f-ai-note'); n.textContent = text; n.hidden = !text; };
+  const pickCategory = (id) => {
+    if (!id || !(income ? INCOME_CATEGORIES : st.categories).some((c) => c.id === id)) return false;
+    f.categoryId = id;
+    $$('.cat-tile', s.sheet).forEach((t) => t.classList.toggle('on', t.dataset.c === id));
+    return true;
+  };
+  /** Результат распознавания чека → поля формы (пользователь проверяет и нажимает «Добавить»). */
+  const applyReceipt = (r) => {
+    if (r.amount > 0) { amountInput.value = String(r.amount).replace('.', ','); }
+    const cur = /^[A-Z]{3}$/.test(r.currency || '') ? r.currency : null;
+    if (cur && cur !== f.currency) {
+      if (!st.settings.currencies.includes(cur)) { st.settings.currencies.push(cur); Store.save(); }
+      if (!q(`#f-curs [data-cur="${cur}"]`)) q('#f-curs').insertAdjacentHTML('beforeend', `<button type="button" class="chip sm" data-cur="${cur}">${flagOf(cur)} ${cur}</button>`);
+      Object.assign(f, { currency: cur, rate: null, rateSource: 'auto', ratePending: false, rateProvider: '', rateDate: '', rateOpen: false });
+      syncCur();
+    }
+    if (/^\d{4}-\d{2}-\d{2}$/.test(r.date || '') && r.date <= todayISO() && toISO(parseISO(r.date)) === r.date) { f.date = r.date; syncDates(); }
+    const text = String(r.comment || r.merchant || '').trim().slice(0, 140);
+    if (text) q('#f-comment').value = text;
+    pickCategory(r.categoryId);
+    if (Array.isArray(r.tags) && r.tags.length) { q('#f-tags').value = unique([...parseTags(q('#f-tags').value), ...r.tags.map(normTag).filter(Boolean)]).slice(0, 8).map((t) => '#' + t).join(' '); renderTagSugg(); }
+    loadRate();
+    aiNote(r.amount > 0 ? '✨ Заполнено по чеку — проверьте и нажмите «Добавить»' : '✨ Сумму на чеке не нашёл — введите её');
+  };
+  q('#f-receipt').addEventListener('click', () => Receipt.start({ onResult: applyReceipt }));
+  /** Категория по комментарию: сначала свои правила и словарь, если не вышло — ИИ (тихо, без ошибок). */
+  let suggestToken = 0;
+  const autoCategory = async () => {
+    const text = q('#f-comment').value.trim();
+    if (f.categoryId || income || text.length < 3) return;
+    const local = parsePhrase(text);
+    if (local.categoryId && pickCategory(local.categoryId)) { aiNote(''); return; }
+    const tok = ++suggestToken;
+    aiNote('✨ Подбираю категорию…');
+    try {
+      const r = await aiRequest('/api/ai/suggest', { description: text, baseCurrency: b, categories: aiCategoryList() }, { timeout: 8000 });
+      if (tok !== suggestToken || s.closed || f.categoryId) return;
+      aiNote(pickCategory(r.categoryId) ? '✨ Категория подобрана автоматически' : '');
+    } catch (e) { if (tok === suggestToken) aiNote(''); }
+  };
   const amountInput = q('#f-amount');
   // Фокус синхронно в обработчике нажатия — иначе iOS не откроет клавиатуру
   if (!editing) amountInput.focus({ preventScroll: true });
@@ -2393,29 +2408,6 @@ function openExpenseForm({ id = null, prefill = null, onSaved = null, kind = nul
     const have = new Set(parseTags(q('#f-tags').value));
     q('#f-tag-sugg').innerHTML = allTags().filter((t) => !have.has(t)).slice(0, 8).map((t) => `<button type="button" class="chip sm" data-tag="${esc(t)}">#${esc(t)}</button>`).join('');
   };
-  const showAiDraft = (mode, result) => {
-    aiDraft = { mode, result };
-    const amount = Number(result.amount) > 0 ? fmtMoney(Number(result.amount), /^[A-Z]{3}$/.test(result.currency || '') ? result.currency : b) : 'сумма не распознана';
-    const category = S().categories.find((c) => c.id === result.categoryId);
-    const tags = Array.isArray(result.tags) ? result.tags.slice(0, 3).map((t) => '#' + esc(String(t).replace(/^#+/, ''))) : [];
-    const label = mode === 'receipt' ? 'Распознано' : 'Подсказка';
-    const note = mode === 'receipt' ? `${esc(result.merchant || 'Магазин не распознан')} · ${esc(result.date || 'дата не распознана')} · ${esc(amount)}` : `${esc(category ? category.name : 'Категория не определена')}`;
-    const items = mode === 'receipt' && Array.isArray(result.items) ? result.items.slice(0, 5).map((item) => String(item.name || '').trim()).filter(Boolean) : [];
-    q('#f-ai-result').innerHTML = `<div class="card" style="margin:8px 0;padding:12px"><b>${label}:</b> ${note}${result.comment ? `<div class="muted" style="margin-top:4px">${esc(result.comment)}</div>` : ''}${items.length ? `<div class="muted" style="margin-top:4px">Позиции: ${items.map(esc).join(', ')}</div>` : ''}${tags.length ? `<div class="muted" style="margin-top:4px">${tags.join(' ')}</div>` : ''}<button type="button" class="link-btn sm" data-ai-apply>Заполнить черновик</button><div class="muted" style="font-size:12px">Проверьте поля перед сохранением покупки.</div></div>`;
-  };
-  const runAi = async (path, payload, mode) => {
-    if (!AIConfig.load().token) { toast('Сначала настройте Gemini в разделе «Настройки → ИИ»'); return; }
-    const buttons = [q('#f-ai-scan'), q('#f-ai-suggest')];
-    buttons.forEach((button) => { button.disabled = true; });
-    q('#f-ai-result').textContent = 'Отправляю запрос…';
-    try {
-      const data = await aiRequest(path, payload);
-      showAiDraft(mode, data.result || {});
-    } catch (error) {
-      q('#f-ai-result').textContent = error.message;
-      toast(error.message);
-    } finally { buttons.forEach((button) => { button.disabled = false; }); }
-  };
 
   // --- обработчики ---
   amountInput.addEventListener('input', () => {
@@ -2463,53 +2455,6 @@ function openExpenseForm({ id = null, prefill = null, onSaved = null, kind = nul
     syncDates(); loadRate();
   });
   q('#f-tags').addEventListener('input', renderTagSugg);
-  q('#f-ai-scan').addEventListener('click', () => {
-    if (!AIConfig.load().token) { toast('Сначала настройте Gemini в разделе «Настройки → ИИ»'); return; }
-    q('#f-receipt-file').click();
-  });
-  q('#f-receipt-file').addEventListener('change', async (e) => {
-    const file = e.target.files && e.target.files[0];
-    e.target.value = '';
-    if (!file) return;
-    try {
-      q('#f-ai-result').textContent = 'Подготавливаю фото…';
-      const image = await compressReceipt(file);
-      await runAi('/api/ai/receipt', { image, baseCurrency: b, categories: aiCategoryList() }, 'receipt');
-    } catch (error) { q('#f-ai-result').textContent = error.message; toast(error.message); }
-  });
-  q('#f-ai-suggest').addEventListener('click', () => {
-    const description = q('#f-comment').value.trim();
-    if (!description) { toast('Сначала введите описание покупки'); q('#f-comment').focus(); return; }
-    runAi('/api/ai/suggest', { description, baseCurrency: b, categories: aiCategoryList() }, 'suggest');
-  });
-  q('#f-ai-result').addEventListener('click', (e) => {
-    if (!e.target.closest('[data-ai-apply]') || !aiDraft) return;
-    const result = aiDraft.result;
-    if (aiDraft.mode === 'receipt') {
-      if (result.amount > 0) { q('#f-amount').value = String(result.amount).replace('.', ','); renderRate(); }
-      if (result.currency && st.settings.currencies.includes(result.currency)) {
-        f.currency = result.currency; f.rate = null; f.rateSource = 'auto'; f.ratePending = false; f.rateProvider = ''; f.rateDate = '';
-        syncCur(); loadRate();
-      } else if (result.currency && result.currency !== f.currency) {
-        toast(`Добавьте валюту ${result.currency} в настройках, чтобы использовать её`);
-      }
-      if (result.date && /^\d{4}-\d{2}-\d{2}$/.test(result.date) && toISO(parseISO(result.date)) === result.date) {
-        f.date = result.date; syncDates(); loadRate();
-      }
-      if (result.comment || result.merchant) q('#f-comment').value = String(result.comment || result.merchant).slice(0, 140);
-    }
-    if (S().categories.some((c) => c.id === result.categoryId)) {
-      f.categoryId = result.categoryId;
-      $$('[data-c]', s.sheet).forEach((tile) => tile.classList.toggle('on', tile.dataset.c === f.categoryId));
-    }
-    if (Array.isArray(result.tags) && result.tags.length) {
-      const combined = unique([...parseTags(q('#f-tags').value), ...result.tags.map(normTag).filter(Boolean)]).slice(0, 12);
-      q('#f-tags').value = combined.map((tag) => '#' + tag).join(' ');
-      renderTagSugg();
-    }
-    aiDraft = null;
-    q('#f-ai-result').textContent = 'Черновик заполнен. Проверьте поля и нажмите «Добавить».';
-  });
   q('#f-tag-sugg').addEventListener('click', (e) => {
     const x = e.target.closest('[data-tag]');
     if (!x) return;
@@ -2524,6 +2469,7 @@ function openExpenseForm({ id = null, prefill = null, onSaved = null, kind = nul
     $$('[data-p]', s.sheet).forEach((p) => p.classList.toggle('on', p.dataset.p === f.payment));
   });
   ['#f-comment', '#f-tags'].forEach((sel) => q(sel).addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); e.target.blur(); } }));
+  q('#f-comment').addEventListener('change', autoCategory);
 
   /** Собирает данные формы; при ошибке подсвечивает поле и возвращает null. */
   const collect = () => {
@@ -4362,9 +4308,17 @@ async function submitPhrase() {
   if (!v || phraseBusy) return;
   const p = parsePhrase(v);
   if (!p.amount) { shakeEl($('#phrase')); toast('Не вижу сумму — например: «кофе 120»'); return; }
-  if (!p.categoryId) { openPhraseForm(); return; }
   phraseBusy = true;
   try {
+    if (!p.categoryId && p.kind !== 'income' && p.comment) {
+      $('#phrase').classList.add('thinking');
+      try {
+        const r = await aiRequest('/api/ai/suggest', { description: v, baseCurrency: base(), categories: aiCategoryList() }, { timeout: 8000 });
+        if (S().categories.some((c) => c.id === r.categoryId)) p.categoryId = r.categoryId;
+      } catch (e) { /* без ИИ — откроем форму */ }
+      $('#phrase').classList.remove('thinking');
+    }
+    if (!p.categoryId) { openPhraseForm(); return; }
     const e = await addFromPhrase(p);
     if (!e) { toast('Нет курса без интернета — введите его вручную'); openPhraseForm(); return; }
     const card = $('#phrase-prev .ph-card');
@@ -4534,11 +4488,14 @@ const BudgetAlerts = {
 };
 
 /* =====================================================================
-   9g. Фото чека — заготовка (распознавание появится позже)
+   9g. Фото чека: распознавание через ИИ-помощник (Gemini)
    ===================================================================== */
 const Receipt = {
-  /** Когда появится сервер распознавания, здесь будет POST фото на /receipt и разбор ответа. */
-  async recognize(/* file */) { return null; },
+  async recognize(file) {
+    const image = await compressReceipt(file);
+    return aiRequest('/api/ai/receipt', { image, baseCurrency: base(), categories: aiCategoryList() }, { timeout: 40000 });
+  },
+  /** Выбор фото → анимация «сканирования» → поля формы заполняются сами. */
   start({ onResult } = {}) {
     const inp = document.createElement('input');
     inp.type = 'file'; inp.accept = 'image/*'; // без capture: iPhone предложит и камеру, и фото из галереи
@@ -4547,15 +4504,21 @@ const Receipt = {
       if (!file) return;
       const url = URL.createObjectURL(file);
       const s = Sheet.open({
-        title: 'Фото чека',
+        title: 'Фото чека', left: 'Отмена',
         body: `<div class="receipt-prev"><img src="${url}" alt="Чек"><div class="scan-line"></div></div>
-          <p class="sheet-text" style="text-align:center;margin-top:14px"><b>Распознавание чеков скоро появится</b><br>Приложение будет само находить сумму и магазин на фото. Пока введите их вручную.</p>`,
-        foot: '<button class="btn btn-primary" data-ok>Понятно</button>',
+          <p class="sheet-text" id="rc-status" style="text-align:center;margin-top:14px"><span class="spinner"></span> Читаю чек…</p>`,
         onClose: () => URL.revokeObjectURL(url),
       });
-      $('[data-ok]', s.sheet).addEventListener('click', () => Sheet.close(s));
-      const r = await this.recognize(file).catch(() => null);
-      if (r && onResult) { onResult(r); Sheet.close(s); }
+      try {
+        const r = await this.recognize(file);
+        if (s.closed) return;
+        Sheet.close(s);
+        if (onResult) onResult(r);
+      } catch (e) {
+        if (s.closed) return;
+        $('.scan-line', s.sheet).remove();
+        $('#rc-status', s.sheet).innerHTML = `${esc(e.message)}.<br>Можно ввести сумму вручную.`;
+      }
     });
     inp.click();
   },
