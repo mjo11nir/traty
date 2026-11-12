@@ -1,8 +1,8 @@
 # ИИ-помощник для «Траты» (Cloudflare Worker `traty-ai`)
 
-Пересылает в Google Gemini описание траты или фото чека и возвращает черновик покупки (сумма, валюта, дата, магазин, категория, теги). Ничего не хранит: ни текст, ни фото.
+Распознаёт фото чека и подбирает категорию по описанию траты с помощью **Cloudflare Workers AI** (модель Llama 4 Scout). Бесплатно: хватает дневной квоты Cloudflare, внешних ключей и оплаты не нужно. Ничего не хранит: ни текст, ни фото.
 
-**Пользователю ничего настраивать не нужно.** Доступ — по тому же личному ключу, что и сервер «Входящие»; приложение получает его само. Чтобы посторонние не расходовали квоту Gemini, есть лимиты: 60 запросов в день на человека и 1500 в день всего.
+**Пользователю ничего настраивать не нужно.** Доступ — по тому же личному ключу, что и сервер «Входящие»; приложение получает его само. Чтобы посторонние не расходовали квоту, есть лимиты: 60 запросов в день на человека и 1500 в день всего.
 
 ## Где используется в приложении
 
@@ -17,19 +17,20 @@
 Заголовок `Authorization: Bearer <личный ключ>`.
 
 - `GET /api/ai/health` → `{ ok, left }` — остаток запросов на сегодня.
-- `POST /api/ai/suggest` `{ description, categories, baseCurrency }` → `{ ok, result }`.
-- `POST /api/ai/receipt` `{ image: { mimeType, data }, categories, baseCurrency }` → `{ ok, result }`.
+- `POST /api/ai/suggest` `{ description, categories, baseCurrency }` → `{ ok, result, model }`.
+- `POST /api/ai/receipt` `{ image: { mimeType, data }, categories, baseCurrency }` → `{ ok, result, model }`.
 
-Ошибки: `unauthorized`, `limit`, `busy`, `bad_image`, `too_large`, `ai_unavailable` (+ `detail` от Google).
+`result`: `{ amount, currency, date, merchant, comment, categoryId, tags, items }` (ответ модели приводится к этому виду).
+Ошибки: `unauthorized`, `limit`, `busy`, `bad_image`, `too_large`, `ai_unavailable` (+ `detail`).
 
 ## Привязки воркера
 
-- `GEMINI_API_KEY` — секрет, ключ Gemini API из Google AI Studio (aistudio.google.com → Get API key). Подписка Gemini не даёт API-кредит: у API своя бесплатная квота и свой биллинг.
+- `AI` — Workers AI.
 - `INBOX` — тот же KV namespace, что у `traty-inbox` (проверка ключей и счётчики лимитов).
 - `TOKEN` — секрет, ключ владельца (как в `traty-inbox`).
 
-Модель: первая доступная из списка `MODELS` в `worker.js` (если Google переименует модель — берётся следующая).
+Модели — списки `TEXT_MODELS` и `VISION_MODELS` в `worker.js` (если первая недоступна, берётся следующая).
 
 ## Обновление
 
-Через Cloudflare API с `keep_bindings: ["secret_text", "kv_namespace"]` в metadata — секреты сохраняются. После обновления проверить `GET /api/ai/health`.
+Через Cloudflare API с `keep_bindings: ["secret_text", "kv_namespace", "ai"]` в metadata. После обновления проверить `GET /api/ai/health` и одно распознавание.
