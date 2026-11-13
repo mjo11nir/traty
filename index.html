@@ -835,7 +835,7 @@ details.adv[open] summary { margin-bottom: 10px; }
 /* =====================================================================
    1. Константы и утилиты
    ===================================================================== */
-const APP_VERSION = '1.7.3';
+const APP_VERSION = '1.7.4';
 const STORAGE_KEY = 'traty.data.v1';
 const RATES_KEY = 'traty.rates.v1';
 const THEME_KEY = 'traty.theme';
@@ -4494,7 +4494,7 @@ const BudgetAlerts = {
 const Receipt = {
   async recognize(file) {
     const image = await compressReceipt(file);
-    return aiRequest('/api/ai/receipt', { image, baseCurrency: base(), categories: aiCategoryList() }, { timeout: 40000 });
+    return aiRequest('/api/ai/receipt', { image, baseCurrency: base(), categories: aiCategoryList() }, { timeout: 60000 });
   },
   /** Выбор фото → анимация «сканирования» → поля формы заполняются сами. */
   start({ onResult } = {}) {
@@ -4510,12 +4510,16 @@ const Receipt = {
           <p class="sheet-text" id="rc-status" style="text-align:center;margin-top:14px"><span class="spinner"></span> Читаю чек…</p>`,
         onClose: () => URL.revokeObjectURL(url),
       });
+      // длинный чек читается дольше — показываем, что работа идёт
+      const slow = setTimeout(() => { const el = $('#rc-status', s.sheet); if (el && !s.closed) el.innerHTML = '<span class="spinner"></span> Чек длинный — ещё чуть-чуть…'; }, 12000);
       try {
         const r = await this.recognize(file);
+        clearTimeout(slow);
         if (s.closed) return;
         Sheet.close(s);
         if (onResult) onResult(r);
       } catch (e) {
+        clearTimeout(slow);
         if (s.closed) return;
         $('.scan-line', s.sheet).remove();
         $('#rc-status', s.sheet).innerHTML = `${esc(e.message)}.<br>Можно ввести сумму вручную.`;
