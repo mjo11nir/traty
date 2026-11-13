@@ -1,0 +1,8 @@
+{
+  "name": "traty-tests",
+  "private": true,
+  "description": "Проверки приложения «Траты». Запуск: bash tests/run.sh",
+  "devDependencies": {
+    "http_ece": "1.2.0"
+  }
+}
