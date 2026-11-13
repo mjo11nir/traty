@@ -487,6 +487,13 @@ details.adv[open] summary { margin-bottom: 10px; }
 .sheet-form .amount-input { transition: color .25s; }
 .receipt-chip { gap: 6px; }
 .receipt-field { margin-top: 12px; }
+.rc-items { border-radius: 14px; background: var(--surface-2); padding: 12px 14px; animation: rowIn2 .3s var(--ease); }
+.rc-items summary { font-weight: 650; font-size: 14.5px; cursor: pointer; }
+.rc-list { margin-top: 8px; display: grid; gap: 6px; max-height: 40vh; overflow-y: auto; }
+.rc-row { display: grid; grid-template-columns: 1fr auto auto; gap: 8px; align-items: baseline; font-size: 13.5px; }
+.rc-name { min-width: 0; overflow-wrap: anywhere; }
+.rc-qty { color: var(--text-2); font-size: 12.5px; white-space: nowrap; }
+.rc-price { font-variant-numeric: tabular-nums; font-weight: 600; white-space: nowrap; }
 .ai-note { display: block; margin-top: 8px; font-size: 13px; color: var(--accent-text); animation: rowIn2 .3s var(--ease); }
 .phrase.thinking .ph-ico { animation: spin 1s linear infinite; display: inline-block; }
 @keyframes rowIn2 { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
@@ -835,7 +842,7 @@ details.adv[open] summary { margin-bottom: 10px; }
 /* =====================================================================
    1. Константы и утилиты
    ===================================================================== */
-const APP_VERSION = '1.7.4';
+const APP_VERSION = '1.8.0';
 const STORAGE_KEY = 'traty.data.v1';
 const RATES_KEY = 'traty.rates.v1';
 const THEME_KEY = 'traty.theme';
@@ -994,7 +1001,7 @@ const fmtPct = (x) => nf({ style: 'percent', maximumFractionDigits: Math.abs(x) 
  * Запрос к ИИ-помощнику. Ключ — тот же, что у «Входящих» (если его нет — приложение получит его само).
  * Ошибки — короткими понятными фразами; null-ответов нет: либо результат, либо исключение.
  */
-async function aiRequest(path, payload, { timeout = 25000 } = {}) {
+async function aiRequest(path, payload, { timeout = 25000, raw = false } = {}) {
   if (navigator.onLine === false) throw new Error('Нет интернета');
   await ensureConnected();
   const ctrl = new AbortController();
@@ -1014,7 +1021,68 @@ async function aiRequest(path, payload, { timeout = 25000 } = {}) {
     const msg = { limit: 'Лимит ИИ на сегодня исчерпан — завтра снова заработает', busy: 'ИИ сейчас перегружен — попробуйте через минуту', too_large: 'Фото слишком большое', bad_image: 'Не получилось прочитать фото' }[data.error];
     throw new Error(msg || 'ИИ временно недоступен');
   }
-  return data.result || {};
+  return raw ? data : data.result || {};
+}
+/**
+ * Потоковый запрос к ИИ (SSE «data: {"response":"…"}»): текст приходит по кусочкам,
+ * поэтому соединение не простаивает и не обрывается на медленных сетях. Возвращает весь текст.
+ */
+async function aiStream(path, payload, { timeout = 150000 } = {}) {
+  if (navigator.onLine === false) throw new Error('Нет интернета');
+  await ensureConnected();
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), timeout);
+  try {
+    const res = await fetch(AI_URL + path, {
+      method: 'POST', signal: ctrl.signal, cache: 'no-store',
+      headers: { Authorization: 'Bearer ' + S().settings.inbox.token, 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    if (!res.ok || !res.body) throw new Error('ИИ временно недоступен');
+    const reader = res.body.getReader(), dec = new TextDecoder();
+    let buf = '', text = '';
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, { stream: true });
+      const lines = buf.split('\n');
+      buf = lines.pop();
+      for (const line of lines) {
+        const m = line.match(/^data:\s*(.+)$/);
+        if (!m || m[1].trim() === '[DONE]') continue;
+        try {
+          const j = JSON.parse(m[1]);
+          // Workers AI присылает либо { response }, либо в формате OpenAI { choices: [{ delta: { content } }] }
+          const piece = typeof j.response === 'string' ? j.response : j.choices && j.choices[0] && j.choices[0].delta && j.choices[0].delta.content;
+          if (typeof piece === 'string') text += piece;
+        } catch (e) { /* неполный кусок */ }
+      }
+    }
+    return text;
+  } finally { clearTimeout(timer); }
+}
+/** Строки «название|кол-во|сумма» от ИИ → позиции чека. */
+function parseItemLines(text) {
+  const num = (v) => { const n = parseFloat(String(v || '').replace(/[^\d.,-]/g, '').replace(',', '.')); return isFinite(n) && n > 0 ? n : 0; };
+  return cleanItems(String(text || '').split(/\r?\n/)
+    .map((line) => line.replace(/^[\s*•\-\d.)]+(?=\D)/, '').split('|').map((x) => x.trim()))
+    .filter((p) => p.length >= 3 && p[0] && !/^(toplam|kdv|nakit|kredi|итог|total)/i.test(p[0]))
+    .map((p) => ({ name: p[0].replace(/\(\d{6,}\)?/g, '').replace(/\s*%\d+\s*$/, '').replace(/\s{2,}/g, ' ').trim(), qty: num(p[1]) || 1, price: num(p[2]) })));
+}
+/** Позиции чека → [{ name, qty, price }] с проверкой (данные с сервера и из импорта). */
+function cleanItems(list) {
+  return (Array.isArray(list) ? list : []).map((it) => ({
+    name: String((it && it.name) || '').trim().slice(0, 60),
+    qty: Math.round((Number(it && it.qty) > 0 ? Number(it.qty) : 1) * 1000) / 1000,
+    price: round2(Number(it && it.price) > 0 ? Number(it.price) : 0),
+  })).filter((it) => it.name && it.price > 0).slice(0, 80);
+}
+/** Список позиций чека (раскрывающийся) — в форме покупки. */
+function itemsHtml(items, cur) {
+  if (!items || !items.length) return '';
+  const sum = round2(items.reduce((a, it) => a + it.price, 0));
+  return `<details class="rc-items"><summary>🧾 Позиции чека · ${items.length} <span class="muted">· ${fmtMoney(sum, cur)}</span></summary>
+    <div class="rc-list">${items.map((it) => `<div class="rc-row"><span class="rc-name">${esc(it.name)}</span><span class="rc-qty">${it.qty !== 1 ? esc(String(it.qty).replace('.', ',')) + ' ×' : ''}</span><span class="rc-price">${fmtMoney(it.price, cur)}</span></div>`).join('')}</div></details>`;
 }
 function aiCategoryList() { return S().categories.map((c) => ({ id: c.id, name: c.name })); }
 function fileDataURL(file) {
@@ -1549,7 +1617,7 @@ function matchFilters(e) {
   if (Filters.tags.size && !(e.tags || []).some((t) => Filters.tags.has(t))) return false;
   const q = Filters.q.trim().toLowerCase();
   if (q) {
-    const hay = [e.comment, getCat(e.categoryId).name, (e.tags || []).map((t) => '#' + t).join(' '), e.payment, e.currency, String(e.amount)].join(' ').toLowerCase();
+    const hay = [e.comment, getCat(e.categoryId).name, (e.tags || []).map((t) => '#' + t).join(' '), e.payment, e.currency, String(e.amount), (e.items || []).map((it) => it.name).join(' ')].join(' ').toLowerCase();
     if (!q.split(/\s+/).every((tok) => hay.includes(tok))) return false;
   }
   return true;
@@ -1730,6 +1798,7 @@ function txRow(e, { showDate = false } = {}) {
   if (showDate) sub.push(fmtDay(e.date));
   if (e.comment) sub.push(esc(c.name));
   if (e.payment) sub.push(esc(e.payment));
+  if (e.items && e.items.length) sub.push(`🧾 ${e.items.length}`);
   if (e.tags && e.tags.length) sub.push(e.tags.map((t) => `<span class="tag">#${esc(t)}</span>`).join(' '));
   const foreign = e.currency !== b;
   const orig = foreign
@@ -2283,6 +2352,7 @@ function openExpenseForm({ id = null, prefill = null, onSaved = null, kind = nul
         <button type="button" class="chip sm" data-d="0">Сегодня</button><button type="button" class="chip sm" data-d="-1">Вчера</button>
         <label class="chip sm date-chip">${icon('calendar', 17)}<span id="f-date-label"></span><input type="date" id="f-date" value="${f.date}" aria-label="Дата покупки"></label></div></div>
       <div class="field"><input class="input" id="f-comment" type="text" placeholder="Комментарий (необязательно)" maxlength="140" enterkeyhint="done" value="${esc(src.comment || '')}"></div>
+      <div class="field" id="f-items"${src.items && src.items.length ? '' : ' hidden'}>${itemsHtml(src.items, src.currency || b)}</div>
       <div class="field"><input class="input" id="f-tags" type="text" placeholder="Теги: #отпуск #работа" autocapitalize="none" autocomplete="off" spellcheck="false" enterkeyhint="done" value="${esc((src.tags || []).map((t) => '#' + t).join(' '))}"><div class="chips tag-sugg" id="f-tag-sugg"></div></div>
       <div class="field" id="f-pay-field"${income ? ' hidden' : ''}><div class="field-label">Способ оплаты</div><div class="chips" id="f-pay">${st.settings.paymentMethods.map((p) => `<button type="button" class="chip sm${p === f.payment ? ' on' : ''}" data-p="${esc(p)}">${esc(p)}</button>`).join('')}</div></div>`,
     foot: `<button class="btn btn-primary" id="f-save" type="button">${editing ? 'Сохранить' : 'Добавить'}</button>
@@ -2318,7 +2388,28 @@ function openExpenseForm({ id = null, prefill = null, onSaved = null, kind = nul
     return true;
   };
   /** Результат распознавания чека → поля формы (пользователь проверяет и нажимает «Добавить»). */
+  let receiptItems = editing && editing.items ? editing.items : null, itemsPending = null, savedRec = null;
+  const showItems = () => { const box = q('#f-items'); box.innerHTML = itemsHtml(receiptItems, f.currency); box.hidden = !(receiptItems && receiptItems.length); };
   const applyReceipt = (r) => {
+    // позиции чека приходят позже: если покупка уже сохранена — дописываем к ней
+    if (r.itemsPromise) {
+      const p = (itemsPending = r.itemsPromise);
+      aiNote('✨ Заполнено по чеку — проверьте и нажмите «Добавить». Позиции дописываются…');
+      p.then((items) => {
+        if (itemsPending !== p || !items.length) { if (itemsPending === p && !s.closed) aiNote('✨ Заполнено по чеку — проверьте и нажмите «Добавить»'); return; }
+        if (savedRec) {
+          const rec = S().expenses.find((e) => e.id === savedRec.id);
+          if (!rec) return;
+          rec.items = items;
+          Store.commit();
+          toast(`🧾 К покупке «${rec.comment || getCat(rec.categoryId).name}» добавлены позиции чека: ${items.length}`);
+        } else if (!s.closed) {
+          receiptItems = items;
+          showItems();
+          aiNote(`✨ Заполнено по чеку, позиций: ${items.length} — проверьте и нажмите «Добавить»`);
+        }
+      });
+    }
     if (r.amount > 0) { amountInput.value = String(r.amount).replace('.', ','); }
     const cur = /^[A-Z]{3}$/.test(r.currency || '') ? r.currency : null;
     if (cur && cur !== f.currency) {
@@ -2333,7 +2424,7 @@ function openExpenseForm({ id = null, prefill = null, onSaved = null, kind = nul
     pickCategory(r.categoryId);
     if (Array.isArray(r.tags) && r.tags.length) { q('#f-tags').value = unique([...parseTags(q('#f-tags').value), ...r.tags.map(normTag).filter(Boolean)]).slice(0, 8).map((t) => '#' + t).join(' '); renderTagSugg(); }
     loadRate();
-    aiNote(r.amount > 0 ? '✨ Заполнено по чеку — проверьте и нажмите «Добавить»' : '✨ Сумму на чеке не нашёл — введите её');
+    if (!(r.amount > 0)) aiNote('✨ Сумму на чеке не нашёл — введите её');
   };
   q('#f-receipt').addEventListener('click', () => Receipt.start({ onResult: applyReceipt }));
   /** Категория по комментарию: сначала свои правила и словарь, если не вышло — ИИ (тихо, без ошибок). */
@@ -2502,6 +2593,8 @@ function openExpenseForm({ id = null, prefill = null, onSaved = null, kind = nul
       rec = { id: uid(), ...data, createdAt: (prefill && prefill.createdAt) || Date.now(), updatedAt: Date.now() };
       if (income) { rec.kind = 'income'; st.incomes.push(rec); } else st.expenses.push(rec);
     }
+    if (!income && receiptItems && receiptItems.length) rec.items = receiptItems;
+    savedRec = rec;
     if (onSaved) onSaved(rec);
     App.flash(rec.id);
     Sheet.close(s);
@@ -2919,6 +3012,7 @@ function normalizeExpense(x, fileBase) {
     tags: Array.isArray(x.tags) ? x.tags.map(normTag).filter(Boolean) : [],
     createdAt: Number(x.createdAt) || parseISO(date).getTime(), updatedAt: Number(x.updatedAt) || Date.now(),
     ...(x.demo ? { demo: true } : {}), ...(x.demoFactor ? { demoFactor: x.demoFactor } : {}),
+    ...(Array.isArray(x.items) && x.items.length ? { items: cleanItems(x.items) } : {}),
   };
 }
 function parseBackupJSON(text) {
@@ -4492,9 +4586,15 @@ const BudgetAlerts = {
    9g. Фото чека: распознавание через ИИ-помощник (Workers AI)
    ===================================================================== */
 const Receipt = {
+  /**
+   * Итог, дата, магазин и категория приходят быстро; позиции чека — отдельным запросом
+   * параллельно (это дольше), поэтому возвращаем их как обещание `items`.
+   */
   async recognize(file) {
     const image = await compressReceipt(file);
-    return aiRequest('/api/ai/receipt', { image, baseCurrency: base(), categories: aiCategoryList() }, { timeout: 60000 });
+    const items = aiStream('/api/ai/receipt-items?stream=1', { image }).then(parseItemLines).catch(() => []);
+    const r = await aiRequest('/api/ai/receipt', { image, baseCurrency: base(), categories: aiCategoryList() }, { timeout: 60000 });
+    return { ...r, itemsPromise: items };
   },
   /** Выбор фото → анимация «сканирования» → поля формы заполняются сами. */
   start({ onResult } = {}) {

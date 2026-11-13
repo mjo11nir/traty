@@ -22,7 +22,7 @@
    - новые поля — только с значениями по умолчанию в `defaultState()` **и** в `migrate()` (старые данные должны открываться без ошибок);
    - не переименовывать и не удалять существующие поля; если формат правда нужно поменять — миграция в `migrate()` и предупреждение владельцу;
    - проверить, что импорт/экспорт JSON (`exportJSON`, `parseBackupJSON`, `handleImportFile`) и облачная копия (`Backup.snapshot`) учитывают новые данные.
-   - данные: `expenses`, `incomes` (как покупки + `kind: 'income'`), `goals`, `debts`, `categories`, `templates`, `merchantRules`, `inbox`, `settings` (в т. ч. `inbox`, `backup`, `notify`), `meta`.
+   - данные: `expenses` (необязательное поле `items` — позиции чека `[{ name, qty, price }]`), `incomes` (как покупки + `kind: 'income'`), `goals`, `debts`, `categories`, `templates`, `merchantRules`, `inbox`, `settings` (в т. ч. `inbox`, `backup`, `notify`), `meta`.
 3. **Версия.** Поднять `APP_VERSION` в `index.html` и `VERSION` в `sw.js` (одинаково: `1.2.0` → `traty-v1.2.0`). Без этого у пользователя не появится «Доступна новая версия». Мелкое исправление — третья цифра, новая функция — вторая.
 4. **Проверка перед слиянием.** Запустить локально (`python3 -m http.server 8000`) и прогнать в Playwright с эмуляцией iPhone: новая функция + основные старые сценарии (добавить покупку, шаблон, аналитика, импорт JSON). Смотреть скриншоты, светлую и тёмную тему, узкий экран (iPhone SE). Ошибки в консоли (`pageerror`) недопустимы.
 5. **Документация.** Запись в `CHANGELOG.md`; если меняется то, что видит пользователь, — `README.md`.
